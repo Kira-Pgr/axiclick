@@ -84,6 +84,12 @@ def load_all_models():
         caption_path, trust_remote_code=True
     )
 
+    # Move caption model to MPS at load time so it stays on GPU
+    import torch
+    if torch.backends.mps.is_available():
+        _caption_model = _caption_model.to("mps")
+        print("server: using MPS (Apple GPU) for YOLO + Florence2", file=sys.stderr, flush=True)
+
     print("server: loading EasyOCR...", file=sys.stderr, flush=True)
     _easyocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
 
@@ -109,10 +115,12 @@ def _run_ocr_cached(image):
 
 
 def _run_yolo_cached(image, box_threshold=0.05, iou_threshold=0.1, imgsz=640):
+    import torch
     import numpy as np
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
     img_np = np.array(image)
     results = _yolo_model.predict(
-        source=img_np, conf=box_threshold, iou=iou_threshold, imgsz=imgsz, verbose=False
+        source=img_np, conf=box_threshold, iou=iou_threshold, imgsz=imgsz, verbose=False, device=device
     )
     elements = []
     if results and len(results) > 0:
@@ -125,10 +133,9 @@ def _run_yolo_cached(image, box_threshold=0.05, iou_threshold=0.1, imgsz=640):
 
 def _caption_elements_cached(image, elements):
     import torch
-    from PIL import Image as PILImage
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    model = _caption_model.to(device)
+    model = _caption_model  # already on device from load_models()
 
     for elem in elements:
         if elem["kind"] != "icon" or elem["label"]:

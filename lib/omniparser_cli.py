@@ -91,8 +91,10 @@ def run_ocr(image):
 
 def run_yolo(image, yolo_model, box_threshold=0.05, iou_threshold=0.1, imgsz=640):
     """Run YOLO icon detection on image."""
+    import torch
     import numpy as np
 
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
     img_np = np.array(image)
     results = yolo_model.predict(
         source=img_np,
@@ -100,6 +102,7 @@ def run_yolo(image, yolo_model, box_threshold=0.05, iou_threshold=0.1, imgsz=640
         iou=iou_threshold,
         imgsz=imgsz,
         verbose=False,
+        device=device,
     )
 
     elements = []
