@@ -6,7 +6,7 @@
     "axiclick": "./bin/axiclick.js"
   },
   "scripts": {
-    "postinstall": "swiftc -O lib/scroll-helper.swift -o lib/scroll-helper 2>/dev/null || true"
+    "postinstall": "swiftc -O lib/scroll-helper.swift -o lib/scroll-helper 2>/dev/null || true; swiftc -O lib/ax-helper.swift -o lib/ax-helper 2>/dev/null || true"
   },
   "license": "MIT",
   "engines": {

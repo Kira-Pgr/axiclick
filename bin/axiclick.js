@@ -370,6 +370,65 @@ commands['screen'] = function cmdScreen(args) {
   })), ['id', 'name', 'resolution', 'retina', 'main']));
 };
 
+commands['snapshot'] = function cmdSnapshot(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick snapshot [--depth <n>]\n\nShow the accessibility tree of the frontmost app.\nEach element gets a @uid for use with \`axiclick ax-click\` and \`axiclick ax-fill\`.\n\nFlags:\n  --depth <n>  Max tree depth (default: 10)\n\nNotes:\n  Works best with native macOS apps (Finder, Safari, Xcode, System Settings).\n  Cross-platform apps (Electron, WeChat) may expose minimal trees.\n\nExamples:\n  axiclick snapshot\n  axiclick snapshot --depth 5`);
+    return;
+  }
+  let depth = '10';
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--depth' && args[i + 1]) depth = args[++i];
+  }
+  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const { run: execRun } = require('../lib/exec');
+  const fs = require('fs');
+  if (!fs.existsSync(helperPath)) {
+    // Compile on first use
+    const { runShell } = require('../lib/exec');
+    const srcPath = path.join(__dirname, '..', 'lib', 'ax-helper.swift');
+    const compileResult = runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
+    if (typeof compileResult === 'object' && compileResult.error) die('Failed to compile ax-helper: ' + compileResult.error);
+  }
+  const result = execRun(helperPath, ['snapshot', depth], { timeout: 15000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+  out(toon.help([
+    'Run `axiclick ax-click @<uid>` to click an element',
+    'Run `axiclick ax-fill @<uid> "<text>"` to set a text field',
+    'Run `axiclick snapshot --depth 5` for a shallower tree',
+  ]));
+};
+
+commands['ax-click'] = function cmdAxClick(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick ax-click @<uid>\n\nClick an accessibility element by its UID from the last snapshot.\nUIDs are assigned fresh each snapshot — always snapshot first.\n\nExamples:\n  axiclick ax-click @5\n  axiclick ax-click @42`);
+    return;
+  }
+  const uid = (args[0] || '').replace('@', '');
+  if (!uid || isNaN(+uid)) die('Expected @uid', ['Run `axiclick snapshot` first, then `axiclick ax-click @<uid>`']);
+  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(helperPath, ['click', uid], { timeout: 15000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+};
+
+commands['ax-fill'] = function cmdAxFill(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick ax-fill @<uid> <text>\n\nSet the value of a text field by its UID from the last snapshot.\n\nExamples:\n  axiclick ax-fill @7 "Hello world"\n  axiclick ax-fill @3 "search query"`);
+    return;
+  }
+  const uid = (args[0] || '').replace('@', '');
+  const text = args.slice(1).join(' ');
+  if (!uid || isNaN(+uid)) die('Expected @uid', ['Run `axiclick snapshot` first, then `axiclick ax-fill @<uid> "<text>"`']);
+  if (!text) die('Expected text', ['Run `axiclick ax-fill @<uid> "<text>"`']);
+  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(helperPath, ['fill', uid, text], { timeout: 15000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+};
+
 commands['scroll'] = function cmdScroll(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick scroll <direction> [<amount>] [--at <x>,<y>]\n\nScroll in the given direction. Amount defaults to 5 (lines).\nDirections: up, down, left, right\n\nFlags:\n  --at <x>,<y>  Scroll at a specific position (moves mouse first)\n\nExamples:\n  axiclick scroll down\n  axiclick scroll up 10\n  axiclick scroll down 3 --at 500,400`);
