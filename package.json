@@ -1,0 +1,17 @@
+{
+  "name": "axiclick",
+  "version": "0.1.0",
+  "description": "AXI-compliant macOS mouse, keyboard, and screen automation for AI agents",
+  "bin": {
+    "axiclick": "./bin/axiclick.js"
+  },
+  "scripts": {
+    "postinstall": "swiftc -O lib/scroll-helper.swift -o lib/scroll-helper 2>/dev/null || true"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["darwin"],
+  "keywords": ["axi", "cliclick", "macos", "automation", "agent", "mouse", "keyboard", "screenshot"]
+}
