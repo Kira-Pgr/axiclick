@@ -61,8 +61,42 @@ def load_models():
     return yolo_model, caption_model, caption_processor
 
 
-def run_ocr(image):
-    """Run EasyOCR on image, return list of (bbox, text)."""
+def run_ocr(image, image_path=None):
+    """Run macOS Vision framework OCR via native helper, fallback to EasyOCR."""
+    import subprocess
+    import json
+    import tempfile
+
+    # Try native Vision OCR first (16x faster than EasyOCR)
+    ocr_helper = Path(__file__).parent / "ocr-helper"
+    if ocr_helper.exists():
+        # Save image to temp file if we don't have a path
+        if image_path is None:
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            image.save(tmp.name)
+            image_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                [str(ocr_helper), image_path],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                elements = []
+                for item in json.loads(result.stdout):
+                    if item.get("conf", 1.0) < 0.3:
+                        continue
+                    elements.append({
+                        "bbox": [item["x1"], item["y1"], item["x2"], item["y2"]],
+                        "label": item["text"],
+                        "kind": "text",
+                        "conf": float(item.get("conf", 1.0)),
+                    })
+                return elements
+        except Exception:
+            pass  # fall through to EasyOCR
+
+    # Fallback: EasyOCR
     import easyocr
     import numpy as np
 
@@ -74,7 +108,6 @@ def run_ocr(image):
     for bbox, text, conf in results:
         if conf < 0.3:
             continue
-        # bbox is [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
         x1 = int(min(p[0] for p in bbox))
         y1 = int(min(p[1] for p in bbox))
         x2 = int(max(p[0] for p in bbox))
@@ -282,7 +315,7 @@ def main():
 
     # Run OCR
     print("running OCR...", file=sys.stderr)
-    ocr_elements = run_ocr(image)
+    ocr_elements = run_ocr(image, image_path=args.image)
 
     # Run YOLO detection
     print("detecting elements...", file=sys.stderr)

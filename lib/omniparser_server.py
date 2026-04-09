@@ -98,7 +98,32 @@ def load_all_models():
 
 # ── Inference helpers (mirrors omniparser_cli.py, uses cached models) ─────────
 
-def _run_ocr_cached(image):
+def _run_ocr_cached(image, image_path=None):
+    import subprocess
+    import json as json_mod
+
+    # Try native Vision OCR first
+    ocr_helper = AXICLICK_DIR.parent / "Downloads" / "axiclick" / "lib" / "ocr-helper"
+    if not ocr_helper.exists():
+        ocr_helper = Path(__file__).parent / "ocr-helper"
+    if ocr_helper.exists() and image_path:
+        try:
+            result = subprocess.run(
+                [str(ocr_helper), image_path],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                elements = []
+                for item in json_mod.loads(result.stdout):
+                    if item.get("conf", 1.0) < 0.3:
+                        continue
+                    elements.append({"bbox": [item["x1"], item["y1"], item["x2"], item["y2"]],
+                                     "label": item["text"], "kind": "text", "conf": float(item.get("conf", 1.0))})
+                return elements
+        except Exception:
+            pass
+
+    # Fallback: EasyOCR
     import numpy as np
     img_np = np.array(image)
     results = _easyocr_reader.readtext(img_np)
@@ -275,7 +300,7 @@ def handle_run(req):
     img_w, img_h = image.size
 
     with _models_lock:
-        ocr_elements = _run_ocr_cached(image)
+        ocr_elements = _run_ocr_cached(image, image_path=image_path)
         yolo_elements = _run_yolo_cached(image, box_threshold, iou_threshold, imgsz)
         if not no_caption and yolo_elements:
             yolo_elements = _caption_elements_cached(image, yolo_elements)
