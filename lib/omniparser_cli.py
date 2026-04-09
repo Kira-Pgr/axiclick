@@ -249,6 +249,7 @@ def main():
     parser.add_argument("--iou-threshold", type=float, default=0.1)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--no-caption", action="store_true", help="Skip captioning")
+    parser.add_argument("--scale", type=float, default=1.0, help="Retina scale factor (auto-detected if not set)")
     args = parser.parse_args()
 
     if args.check:
@@ -303,12 +304,15 @@ def main():
     annotated = annotate_image(image, all_elements)
     annotated.save(args.output)
 
-    # Output TOON to stdout
+    # Output TOON to stdout with screen coordinates (divide by Retina scale)
+    scale = args.scale
     file_size = os.path.getsize(args.output)
     print(f"som:")
     print(f"  path: {args.output}")
     print(f"  size: {file_size // 1024}KB")
     print(f"  elements: {len(all_elements)}")
+    if scale != 1.0:
+        print(f"  scale: {scale}x (coords are screen-ready)")
 
     if not all_elements:
         print("marks: 0 elements detected")
@@ -318,10 +322,15 @@ def main():
             x1, y1, x2, y2 = elem["bbox"]
             w = x2 - x1
             h = y2 - y1
+            # Convert to screen coordinates
+            sx = int(x1 / scale)
+            sy = int(y1 / scale)
+            sw = int(w / scale)
+            sh = int(h / scale)
             label = elem["label"].replace('"', '\\"').replace("\n", " ")
             if "," in label or label.startswith('"'):
                 label = f'"{label}"'
-            print(f"  {elem['id']},{elem['kind']},{label},{x1},{y1},{w},{h}")
+            print(f"  {elem['id']},{elem['kind']},{label},{sx},{sy},{sw},{sh}")
 
 
 if __name__ == "__main__":

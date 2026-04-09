@@ -666,10 +666,14 @@ commands['som'] = function cmdSom(args) {
   const ssResult = screen.screenshot(tmpScreenshot);
   if (ssResult.error) die(ssResult.error);
 
-  // Run OmniParser
+  // Detect Retina scale factor
+  const disps = screen.displays();
+  const scale = (Array.isArray(disps) && disps.length && disps.find(d => d.main)?.retina) ? 2 : 1;
+
+  // Run OmniParser with scale factor so output coords are screen-ready
   const { run: execRun } = require('../lib/exec');
   const result = execRun(SOM_PYTHON, [
-    SOM_CLI, tmpScreenshot, outputPath, ...passthrough
+    SOM_CLI, tmpScreenshot, outputPath, '--scale', String(scale), ...passthrough
   ], { timeout: 120000 });
 
   // Clean up temp screenshot
