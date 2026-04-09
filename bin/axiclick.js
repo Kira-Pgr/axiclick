@@ -511,6 +511,178 @@ commands['run'] = function cmdRun(args) {
   confirmAction('run', { commands: raw });
 };
 
+// ── SoM (Set-of-Mark) via OmniParser ─────────────────
+
+const AXICLICK_DIR = path.join(os.homedir(), '.axiclick');
+const SOM_VENV = path.join(AXICLICK_DIR, 'venv');
+const SOM_MODELS = path.join(AXICLICK_DIR, 'models');
+const SOM_PYTHON = path.join(SOM_VENV, 'bin', 'python3');
+const SOM_CLI = path.join(__dirname, '..', 'lib', 'omniparser_cli.py');
+
+function somReady() {
+  const fs = require('fs');
+  return fs.existsSync(SOM_PYTHON) &&
+    fs.existsSync(path.join(SOM_MODELS, 'icon_detect', 'model.pt')) &&
+    fs.existsSync(path.join(SOM_MODELS, 'icon_caption_florence', 'model.safetensors'));
+}
+
+commands['som-setup'] = function cmdSomSetup(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-setup\n\nSet up OmniParser V2 for Set-of-Mark element detection.\nCreates ~/.axiclick/ with a Python venv and downloads models from HuggingFace.\nRequires ~2GB disk space. Run once.\n\nExamples:\n  axiclick som-setup`);
+    return;
+  }
+  const fs = require('fs');
+  const { runShell } = require('../lib/exec');
+
+  // 1. Create directory
+  fs.mkdirSync(AXICLICK_DIR, { recursive: true });
+  out('som-setup:');
+
+  // 2. Create venv
+  if (!fs.existsSync(SOM_PYTHON)) {
+    out('  step: creating Python venv...');
+    const venvResult = runShell(`python3 -m venv "${SOM_VENV}"`, { timeout: 30000 });
+    if (typeof venvResult === 'object' && venvResult.error) die('Failed to create venv: ' + venvResult.error);
+  } else {
+    out('  step: venv exists');
+  }
+
+  // 3. Install deps
+  out('  step: installing dependencies (this may take a few minutes)...');
+  const reqPath = path.join(__dirname, '..', 'lib', 'omniparser_requirements.txt');
+  const pipResult = runShell(
+    `"${SOM_PYTHON}" -m pip install --quiet -r "${reqPath}"`,
+    { timeout: 600000 }
+  );
+  if (typeof pipResult === 'object' && pipResult.error) {
+    die('Failed to install dependencies: ' + pipResult.error);
+  }
+  out('  step: dependencies installed');
+
+  // 4. Download models
+  const yoloModel = path.join(SOM_MODELS, 'icon_detect', 'model.pt');
+  const captionModel = path.join(SOM_MODELS, 'icon_caption_florence', 'model.safetensors');
+
+  if (!fs.existsSync(yoloModel) || !fs.existsSync(captionModel)) {
+    out('  step: downloading OmniParser V2 models from HuggingFace (~2GB)...');
+    fs.mkdirSync(path.join(SOM_MODELS, 'icon_detect'), { recursive: true });
+    fs.mkdirSync(path.join(SOM_MODELS, 'icon_caption_florence'), { recursive: true });
+
+    // Download using huggingface_hub from the venv
+    const dlScript = `
+import os
+from huggingface_hub import hf_hub_download
+
+models_dir = "${SOM_MODELS.replace(/"/g, '\\"')}"
+
+# Icon detection model
+for f in ["model.pt", "model.yaml", "train_args.yaml"]:
+    hf_hub_download("microsoft/OmniParser-v2.0", f"icon_detect/{f}",
+                    local_dir=models_dir, local_dir_use_symlinks=False)
+
+# Caption model (Florence2)
+for f in ["config.json", "generation_config.json", "model.safetensors"]:
+    hf_hub_download("microsoft/OmniParser-v2.0", f"icon_caption/{f}",
+                    local_dir=models_dir, local_dir_use_symlinks=False)
+
+# Rename icon_caption -> icon_caption_florence if needed
+src = os.path.join(models_dir, "icon_caption")
+dst = os.path.join(models_dir, "icon_caption_florence")
+if os.path.exists(src) and not os.path.exists(dst):
+    os.rename(src, dst)
+elif os.path.exists(src) and os.path.exists(dst):
+    import shutil
+    for f in os.listdir(src):
+        shutil.move(os.path.join(src, f), os.path.join(dst, f))
+    os.rmdir(src)
+
+print("done")
+`.trim();
+
+    const dlResult = runShell(
+      `"${SOM_PYTHON}" -c '${dlScript.replace(/'/g, "'\\''")}'`,
+      { timeout: 600000 }
+    );
+    if (typeof dlResult === 'object' && dlResult.error) {
+      die('Failed to download models: ' + dlResult.error);
+    }
+
+    // Download Florence2 processor files (tokenizer, preprocessor)
+    const procScript = `
+from transformers import AutoProcessor
+proc = AutoProcessor.from_pretrained("microsoft/Florence-2-base-ft", trust_remote_code=True)
+proc.save_pretrained("${SOM_MODELS.replace(/"/g, '\\"')}/icon_caption_florence")
+print("done")
+`.trim();
+    out('  step: downloading Florence2 processor...');
+    const procResult = runShell(
+      `"${SOM_PYTHON}" -c '${procScript.replace(/'/g, "'\\''")}'`,
+      { timeout: 120000 }
+    );
+    if (typeof procResult === 'object' && procResult.error) {
+      die('Failed to download processor: ' + procResult.error);
+    }
+
+    out('  step: models downloaded');
+  } else {
+    out('  step: models exist');
+  }
+
+  out('  status: ready');
+  out(toon.help([
+    'Run `axiclick som <output-path>` to take a SoM-annotated screenshot',
+    'Run `axiclick som /tmp/som.png` to try it out',
+  ]));
+};
+
+commands['som'] = function cmdSom(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som <output-path> [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
+    return;
+  }
+
+  if (!somReady()) {
+    die('OmniParser not set up', ['Run `axiclick som-setup` first (~2GB download, one-time)']);
+  }
+
+  // Parse args
+  let outputPath = null;
+  const passthrough = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      passthrough.push(args[i]);
+      if (args[i + 1] && !args[i + 1].startsWith('--')) {
+        passthrough.push(args[++i]);
+      }
+    } else if (!outputPath) {
+      outputPath = args[i];
+    }
+  }
+
+  if (!outputPath) die('Expected output path', ['Run `axiclick som <output-path>`']);
+
+  // Take screenshot first
+  const tmpScreenshot = `/tmp/axiclick-som-input-${Date.now()}.png`;
+  const ssResult = screen.screenshot(tmpScreenshot);
+  if (ssResult.error) die(ssResult.error);
+
+  // Run OmniParser
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(SOM_PYTHON, [
+    SOM_CLI, tmpScreenshot, outputPath, ...passthrough
+  ], { timeout: 120000 });
+
+  // Clean up temp screenshot
+  try { require('fs').unlinkSync(tmpScreenshot); } catch {}
+
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+  out(toon.help([
+    'Run `axiclick click <x>,<y>` to click an element (use center of its bbox)',
+    'Run `axiclick som /tmp/som.png --no-caption` for faster detection',
+  ]));
+};
+
 commands['install'] = function cmdInstall(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick install\n\nSelf-install session hooks for Claude Code and Codex.\nRuns idempotently — safe to call multiple times.\n\nExamples:\n  axiclick install`);
