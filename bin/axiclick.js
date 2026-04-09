@@ -635,9 +635,23 @@ print("done")
   ]));
 };
 
+const LAST_SOM_JSON = path.join(AXICLICK_DIR, 'last-som.json');
+const SOM_SOCK = path.join(AXICLICK_DIR, 'som.sock');
+const SOM_SERVER = path.join(__dirname, '..', 'lib', 'omniparser_server.py');
+
+/** Returns true if the server socket exists and responds to a health ping. */
+function somServerRunning() {
+  const fs = require('fs');
+  if (!fs.existsSync(SOM_SOCK)) return false;
+  // Quick TCP-like probe: attempt a synchronous connection via nc
+  const { runShell } = require('../lib/exec');
+  const probe = runShell(`echo '{"action":"ping"}' | nc -U -w 1 "${SOM_SOCK}"`, { timeout: 3000 });
+  return typeof probe === 'string' && probe.includes('pong');
+}
+
 commands['som'] = function cmdSom(args) {
   if (args[0] === '--help') {
-    out(`usage: axiclick som <output-path> [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
+    out(`usage: axiclick som <output-path> [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
     return;
   }
 
@@ -661,6 +675,9 @@ commands['som'] = function cmdSom(args) {
 
   if (!outputPath) die('Expected output path', ['Run `axiclick som <output-path>`']);
 
+  const fs = require('fs');
+  const { run: execRun } = require('../lib/exec');
+
   // Take screenshot first
   const tmpScreenshot = `/tmp/axiclick-som-input-${Date.now()}.png`;
   const ssResult = screen.screenshot(tmpScreenshot);
@@ -670,21 +687,189 @@ commands['som'] = function cmdSom(args) {
   const disps = screen.displays();
   const scale = (Array.isArray(disps) && disps.length && disps.find(d => d.main)?.retina) ? 2 : 1;
 
-  // Run OmniParser with scale factor so output coords are screen-ready
-  const { run: execRun } = require('../lib/exec');
-  const result = execRun(SOM_PYTHON, [
-    SOM_CLI, tmpScreenshot, outputPath, '--scale', String(scale), ...passthrough
-  ], { timeout: 120000 });
+  let toonOutput;
 
-  // Clean up temp screenshot
-  try { require('fs').unlinkSync(tmpScreenshot); } catch {}
+  if (somServerRunning()) {
+    // ── Server path: POST to Unix socket ──────────────────────────────────
+    const { runShell } = require('../lib/exec');
+    const req = JSON.stringify({
+      action: 'run',
+      image: tmpScreenshot,
+      output: outputPath,
+      scale,
+      passthrough,
+      jsonOut: LAST_SOM_JSON,
+    });
+    // Use nc to talk to the Unix socket (synchronous, single request)
+    const escapedReq = req.replace(/'/g, "'\\''");
+    const resp = runShell(
+      `echo '${escapedReq}' | nc -U -w 30 "${SOM_SOCK}"`,
+      { timeout: 120000 }
+    );
+    try { require('fs').unlinkSync(tmpScreenshot); } catch {}
+    if (typeof resp === 'object' && resp.error) die('Server error: ' + resp.error);
+    let parsed;
+    try { parsed = JSON.parse(resp); } catch {
+      die('Malformed server response', [resp.slice ? resp.slice(0, 200) : String(resp)]);
+    }
+    if (parsed.error) die(parsed.error);
+    toonOutput = parsed.toon;
+  } else {
+    // ── Cold-start CLI path ────────────────────────────────────────────────
+    const result = execRun(SOM_PYTHON, [
+      SOM_CLI, tmpScreenshot, outputPath,
+      '--scale', String(scale),
+      '--json-out', LAST_SOM_JSON,
+      ...passthrough,
+    ], { timeout: 120000 });
 
-  if (typeof result === 'object' && result.error) die(result.error);
-  out(result);
+    try { fs.unlinkSync(tmpScreenshot); } catch {}
+
+    if (typeof result === 'object' && result.error) die(result.error);
+    toonOutput = result;
+  }
+
+  out(toonOutput);
   out(toon.help([
-    'Run `axiclick click <x>,<y>` to click an element (use center of its bbox)',
+    'Run `axiclick som-click @<id>` to click an element by its mark ID',
     'Run `axiclick som /tmp/som.png --no-caption` for faster detection',
+    'Run `axiclick som-start` to preload models as a background daemon',
   ]));
+};
+
+commands['som-click'] = function cmdSomClick(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-click @<id>\n\nClick the center of a SoM element from the last \`axiclick som\` run.\nElement coordinates are read from ~/.axiclick/last-som.json.\n\nExamples:\n  axiclick som-click @3\n  axiclick som-click @12`);
+    return;
+  }
+
+  checkCliclick();
+
+  const raw = (args[0] || '').replace('@', '');
+  const id = parseInt(raw, 10);
+  if (!raw || isNaN(id) || id < 1) {
+    die('Expected @<id>', ['Run `axiclick som` first, then `axiclick som-click @<id>`']);
+  }
+
+  const fs = require('fs');
+  if (!fs.existsSync(LAST_SOM_JSON)) {
+    die('No SoM data found', ['Run `axiclick som <output-path>` first to detect elements']);
+  }
+
+  let elements;
+  try {
+    elements = JSON.parse(fs.readFileSync(LAST_SOM_JSON, 'utf8'));
+  } catch (e) {
+    die('Failed to read last-som.json: ' + e.message);
+  }
+
+  const elem = elements.find(el => el.id === id);
+  if (!elem) {
+    die(`Element @${id} not found`, [
+      `Last run detected ${elements.length} element(s): @1–@${elements.length}`,
+      'Run `axiclick som <output-path>` again to refresh',
+    ]);
+  }
+
+  // Click center of bounding box (coordinates are already screen-ready)
+  const cx = Math.round(elem.x + elem.w / 2);
+  const cy = Math.round(elem.y + elem.h / 2);
+
+  const result = cliclick.click(cx, cy);
+  if (typeof result === 'object' && result.error) die(result.error);
+
+  confirmAction('som-click', {
+    id: `@${id}`,
+    label: elem.label || `(${elem.kind})`,
+    position: `${cx},${cy}`,
+  });
+};
+
+const SOM_PID_FILE = path.join(AXICLICK_DIR, 'som-server.pid');
+
+commands['som-start'] = function cmdSomStart(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-start\n\nStart the OmniParser model-preloading daemon in the background.\nThe daemon listens on a Unix socket at ~/.axiclick/som.sock and keeps\nYOLO, EasyOCR, and Florence2 models warm, so subsequent \`axiclick som\`\ncalls avoid the cold-start penalty.\n\nExamples:\n  axiclick som-start\n  axiclick som-stop`);
+    return;
+  }
+
+  if (!somReady()) {
+    die('OmniParser not set up', ['Run `axiclick som-setup` first (~2GB download, one-time)']);
+  }
+
+  if (somServerRunning()) {
+    out(toon.obj('som-server', { status: 'already-running', socket: SOM_SOCK }));
+    return;
+  }
+
+  const fs = require('fs');
+  const { spawn } = require('child_process');
+
+  // Remove stale socket/pid if present
+  try { fs.unlinkSync(SOM_SOCK); } catch {}
+
+  const child = spawn(SOM_PYTHON, [SOM_SERVER], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env },
+  });
+  child.unref();
+  fs.writeFileSync(SOM_PID_FILE, String(child.pid));
+
+  // Wait up to 30 s for the socket to appear and respond
+  const deadline = Date.now() + 30000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    // Busy-poll with a tight sleep via Atomics (avoids spawning another process)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    if (somServerRunning()) { ready = true; break; }
+  }
+
+  if (!ready) {
+    die('Server did not start within 30 s', [
+      'Check that OmniParser models are present: axiclick som-setup',
+      `PID file: ${SOM_PID_FILE}`,
+    ]);
+  }
+
+  out(toon.obj('som-server', {
+    status: 'started',
+    pid: child.pid,
+    socket: SOM_SOCK,
+  }));
+  out(toon.help([
+    'Run `axiclick som <output-path>` — will now use the warm server',
+    'Run `axiclick som-stop` to shut the server down',
+  ]));
+};
+
+commands['som-stop'] = function cmdSomStop(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-stop\n\nStop the OmniParser model-preloading daemon.\n\nExamples:\n  axiclick som-stop`);
+    return;
+  }
+
+  const fs = require('fs');
+
+  // Send shutdown request via socket first (graceful)
+  if (somServerRunning()) {
+    const { runShell } = require('../lib/exec');
+    runShell(`echo '{"action":"shutdown"}' | nc -U -w 3 "${SOM_SOCK}"`, { timeout: 5000 });
+  }
+
+  // Kill by PID if socket is gone but pid file remains
+  if (fs.existsSync(SOM_PID_FILE)) {
+    const pid = fs.readFileSync(SOM_PID_FILE, 'utf8').trim();
+    try {
+      process.kill(parseInt(pid, 10), 'SIGTERM');
+    } catch {}
+    try { fs.unlinkSync(SOM_PID_FILE); } catch {}
+  }
+
+  // Clean up socket file
+  try { fs.unlinkSync(SOM_SOCK); } catch {}
+
+  out(toon.obj('som-server', { status: 'stopped' }));
 };
 
 commands['install'] = function cmdInstall(args) {

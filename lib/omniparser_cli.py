@@ -250,6 +250,7 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--no-caption", action="store_true", help="Skip captioning")
     parser.add_argument("--scale", type=float, default=1.0, help="Retina scale factor (auto-detected if not set)")
+    parser.add_argument("--json-out", metavar="PATH", default=None, help="Write element list as JSON to this path alongside TOON output")
     args = parser.parse_args()
 
     if args.check:
@@ -303,6 +304,26 @@ def main():
     # Annotate and save
     annotated = annotate_image(image, all_elements)
     annotated.save(args.output)
+
+    # Optionally write element list as JSON (screen coordinates)
+    if args.json_out:
+        scale = args.scale
+        json_elements = []
+        for elem in all_elements:
+            x1, y1, x2, y2 = elem["bbox"]
+            w = x2 - x1
+            h = y2 - y1
+            json_elements.append({
+                "id": elem["id"],
+                "kind": elem["kind"],
+                "label": elem["label"],
+                "x": int(x1 / scale),
+                "y": int(y1 / scale),
+                "w": int(w / scale),
+                "h": int(h / scale),
+            })
+        with open(args.json_out, "w") as fh:
+            json.dump(json_elements, fh)
 
     # Output TOON to stdout with screen coordinates (divide by Retina scale)
     scale = args.scale
