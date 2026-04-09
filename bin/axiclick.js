@@ -472,6 +472,107 @@ commands['scroll'] = function cmdScroll(args) {
   confirmAction('scroll', { direction: dir, amount });
 };
 
+commands['swipe'] = function cmdSwipe(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick swipe <direction> [--at <x>,<y>] [--distance <px>] [--duration <ms>]\n       axiclick swipe workspace <direction>\n\nTwo modes:\n  Touch swipe: click-hold-drag for touch interfaces (iPhone Mirroring).\n  Workspace swipe: switch macOS desktop/workspace.\n\nDirections: left, right, up, down, next (=left), prev (=right)\n\nFlags:\n  --at <x>,<y>       Starting position (default: screen center)\n  --distance <px>    Swipe distance in pixels (default: 200)\n  --duration <ms>    Swipe duration (default: 300)\n\nExamples:\n  axiclick swipe next --at 1050,450                   # swipe to next page\n  axiclick swipe prev --at 1050,450                   # swipe to previous page\n  axiclick swipe workspace next                        # next desktop\n  axiclick swipe workspace prev                        # previous desktop`);
+    return;
+  }
+
+  const helperPath = path.join(__dirname, '..', 'lib', 'swipe-helper');
+  const fs = require('fs');
+  if (!fs.existsSync(helperPath)) {
+    const { runShell } = require('../lib/exec');
+    const srcPath = path.join(__dirname, '..', 'lib', 'swipe-helper.swift');
+    runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
+  }
+
+  const { run: execRun } = require('../lib/exec');
+
+  // Workspace swipe mode — use cliclick Ctrl+Arrow (reliable)
+  if (args[0] === 'workspace') {
+    let dir = args[1];
+    if (dir === 'next') dir = 'right';
+    if (dir === 'prev') dir = 'left';
+    if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
+      die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe workspace next`']);
+    }
+    checkCliclick();
+    const arrowKey = `arrow-${dir}`;
+    cliclick.keydown('ctrl');
+    cliclick.keypress(arrowKey);
+    cliclick.keyup('ctrl');
+    confirmAction('swipe-workspace', { direction: dir });
+    return;
+  }
+
+  // Touch swipe mode
+  let dir = args[0];
+  if (dir === 'next') dir = 'left';   // next page = drag left
+  if (dir === 'prev') dir = 'right';  // prev page = drag right
+  if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
+    die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe next [--at <x>,<y>]`', 'Run `axiclick swipe workspace next`']);
+  }
+
+  let atX = 756, atY = 491; // default: screen center
+  let distance = 200;
+  let duration = 300;
+
+  // Try to use screen center as default
+  const disps = screen.displays();
+  if (Array.isArray(disps) && disps.length) {
+    const main = disps.find(d => d.main) || disps[0];
+    atX = Math.round(main.width / (main.retina ? 4 : 2));
+    atY = Math.round(main.height / (main.retina ? 4 : 2));
+  }
+
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--at' && args[i + 1]) {
+      const coords = parseCoords(args[++i]);
+      if (coords) { atX = +coords[0]; atY = +coords[1]; }
+    } else if (args[i] === '--distance' && args[i + 1]) {
+      distance = +args[++i];
+    } else if (args[i] === '--duration' && args[i + 1]) {
+      duration = +args[++i];
+    }
+  }
+
+  let dx = 0, dy = 0;
+  if (dir === 'left') dx = -distance;
+  else if (dir === 'right') dx = distance;
+  else if (dir === 'up') dy = -distance;
+  else if (dir === 'down') dy = distance;
+
+  const result = execRun(helperPath, ['touch', String(atX), String(atY), String(dx), String(dy), String(duration)]);
+  if (typeof result === 'object' && result.error) die(result.error);
+  confirmAction('swipe', { direction: dir, from: `${atX},${atY}`, distance, duration: `${duration}ms` });
+};
+
+commands['browse'] = function cmdBrowse(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick browse <url> [--app <browser>]\n\nOpen a URL in a browser. Uses real mouse/keyboard events — no CDP,\nno automation flags, invisible to anti-bot systems.\n\nFlags:\n  --app <name>  Open in specific browser (default: system default)\n\nExamples:\n  axiclick browse https://perplexity.ai\n  axiclick browse https://example.com --app Safari\n  axiclick browse https://google.com --app "Google Chrome"`);
+    return;
+  }
+  let url = null;
+  let app = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--app' && args[i + 1]) { app = args[++i]; }
+    else if (!args[i].startsWith('--')) { url = args[i]; }
+  }
+  if (!url) die('Expected URL', ['Run `axiclick browse <url>`']);
+  // Ensure URL has protocol
+  if (!url.includes('://')) url = 'https://' + url;
+  const { run: execRun } = require('../lib/exec');
+  const openArgs = app ? ['-a', app, url] : [url];
+  const result = execRun('open', openArgs, { timeout: 10000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  confirmAction('browse', { url, ...(app ? { app } : {}) });
+  out(toon.help([
+    'Run `axiclick wait 2000` to let the page load',
+    'Run `axiclick som /tmp/page.png` to detect page elements',
+    'Use `axiclick som-click @<id>` to interact — no bot detection',
+  ]));
+};
+
 commands['focus'] = function cmdFocus(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick focus <app-name>\n\nBring an application to the foreground.\n\nExamples:\n  axiclick focus Safari\n  axiclick focus "Google Chrome"\n  axiclick focus Finder`);

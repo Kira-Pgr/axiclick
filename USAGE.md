@@ -42,6 +42,8 @@ axiclick som-start           # start model server (keeps models warm)
 - **Repeated SoM calls.** Run `som` once, plan all clicks, then execute. Use `screenshot` for quick checks between actions.
 - **Forgetting `wait`.** After `focus`, `click`, or `som-click`, wait 300-500ms before the next perception command.
 - **Ignoring `som-start`.** Cold SoM takes ~15s. With `som-start`, it takes ~1.5s.
+- **Using keyboard shortcuts (`combo`, `keydown`).** Shortcuts get intercepted by the wrong app, trigger unexpected actions, or vary between apps. Prefer clicking UI elements directly with `som-click`. Only use `key return` and `key esc` which are universally safe.
+- **Clicking text labels on phone screens.** SoM detects app name labels (tiny text below icons). The clickable icon is ~20px above the label. Adjust y coordinate upward when targeting app icons.
 
 ## Command Reference
 
@@ -321,6 +323,42 @@ axiclick ax-fill @7 "search query"
 
 **When to use:** Prefer `snapshot` + `ax-click` for native macOS apps (Finder, Safari, System Settings, Xcode) where the accessibility tree is rich. Fall back to `som` + `som-click` for everything else.
 
+### Navigation
+
+#### `browse <url>`
+
+Open a URL in a browser. Uses the system `open` command — no CDP, no automation flags, completely invisible to anti-bot systems. Then use `som` + `som-click` + `type` to interact with the page visually.
+
+```bash
+axiclick browse https://perplexity.ai
+axiclick browse https://example.com --app Safari
+```
+
+**Why use this instead of `chrome-devtools-axi`?** Sites with anti-bot detection (Cloudflare, reCAPTCHA, etc.) block CDP-based automation. axiclick operates via real mouse/keyboard events — indistinguishable from a human.
+
+#### `swipe <direction>`
+
+Two modes:
+
+**Touch swipe** — for iPhone Mirroring and touch interfaces:
+
+```bash
+axiclick swipe next --at 1050,450           # next page (drag left)
+axiclick swipe prev --at 1050,450           # previous page (drag right)
+axiclick swipe down --at 1050,450           # scroll down
+```
+
+**Workspace swipe** — switch macOS desktops:
+
+```bash
+axiclick swipe workspace next               # next desktop
+axiclick swipe workspace prev               # previous desktop
+```
+
+Directions: `left`, `right`, `up`, `down`, `next` (=left), `prev` (=right).
+
+Flags: `--at <x>,<y>`, `--distance <px>` (default 200), `--duration <ms>` (default 300).
+
 ### App Management
 
 #### `focus <app-name>`
@@ -380,6 +418,35 @@ axiclick som /tmp/wechat2.png --no-caption
 axiclick som-click @<input-box-id>
 axiclick type "Hello!"
 axiclick key return
+```
+
+### Browse a site with anti-bot protection
+
+```bash
+axiclick browse https://perplexity.ai
+axiclick wait 3000                          # let page fully load
+axiclick som /tmp/page.png --no-caption     # detect page elements
+# Find the input field @id from SoM output
+axiclick som-click @<input-id>              # click it (real mouse event)
+axiclick wait 300
+axiclick type "my search query"             # real keyboard events
+axiclick key return                         # submit
+axiclick wait 5000                          # wait for results
+axiclick screenshot /tmp/results.png        # capture results
+```
+
+No CDP, no WebDriver, no automation flags. Just pixels and clicks.
+
+### Swipe through iPhone Mirroring pages
+
+```bash
+axiclick focus "iPhone Mirroring"
+axiclick wait 1000
+axiclick swipe next --at 1050,450           # next home screen page
+axiclick wait 1000
+axiclick som /tmp/iphone.png --no-caption   # detect apps
+# Find the app — if SoM returns a text label, click ~20px above it for the icon
+axiclick som-click @<app-label-id>
 ```
 
 ## Performance
