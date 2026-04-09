@@ -105,6 +105,11 @@ Use `axiclick` for macOS desktop automation.
 - Xcode Command Line Tools (for compiling Swift helpers on first run)
 - Accessibility permissions for your terminal app
 
+## Acknowledgments
+
+- [cliclick](https://github.com/BlueM/cliclick) by Carsten Blüm — the macOS mouse/keyboard engine axiclick wraps. BSD 3-Clause licensed.
+- [AXI](https://github.com/kunchenguid/axi) — the agent ergonomic interface standard this tool follows.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details, including third-party notices.
