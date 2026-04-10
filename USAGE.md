@@ -395,7 +395,10 @@ axiclick swipe workspace next               # next desktop
 axiclick swipe workspace prev               # previous desktop
 ```
 
-Directions: `left`, `right`, `up`, `down`, `next` (=left), `prev` (=right).
+`swipe workspace` uses a native helper that opens Mission Control, targets the adjacent space thumbnail on the active display, and presses it through Accessibility. It does not use `cliclick` or rely on a hardcoded keyboard shortcut.
+
+Touch directions: `left`, `right`, `up`, `down`, `next` (=left), `prev` (=right).
+Workspace directions: `next`, `prev`.
 
 Flags: `--at <x>,<y>`, `--distance <px>` (default 200), `--duration <ms>` (default 300).
 
