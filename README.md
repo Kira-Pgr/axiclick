@@ -17,7 +17,9 @@
 ---
 
 <p align="center">
-  <img src="assets/demo.gif" alt="axiclick demo — SoM workflow detecting and clicking UI elements" width="720">
+  <video src="https://github.com/Kira-Pgr/axiclick/raw/main/assets/demo.mp4" width="720" autoplay loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
 </p>
 
 ## Why axiclick?
