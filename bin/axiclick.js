@@ -153,6 +153,16 @@ commands[''] = function home() {
   // Accessibility check
   checkCliclick();
 
+  const usecases = [
+    'Automate any macOS app with no CLI or API (Finder, WeChat, Xcode, System Settings)',
+    'Interact with sites that block headless browsers (Cloudflare, reCAPTCHA) via real mouse/keyboard',
+    'Control iPhone Mirroring, desktop workspaces, and native macOS UI',
+    'QA test any GUI application with visual verification',
+  ];
+  const ucLines = [`when-to-use[${usecases.length}]:`];
+  for (const u of usecases) ucLines.push(`  ${u}`);
+  parts.push(ucLines.join('\n'));
+
   parts.push(toon.help([
     'Run `axiclick som <path>` to detect all UI elements on screen',
     'Run `axiclick som-click @<id>` to click a detected element',
