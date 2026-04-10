@@ -1,6 +1,6 @@
 {
   "name": "axiclick",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AXI-compliant macOS mouse, keyboard, and screen automation for AI agents",
   "bin": {
     "axiclick": "bin/axiclick.js"
