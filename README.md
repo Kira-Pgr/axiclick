@@ -17,9 +17,7 @@
 ---
 
 <p align="center">
-  <video src="https://github.com/Kira-Pgr/axiclick/raw/main/assets/demo.mp4" width="720" autoplay loop muted playsinline>
-    Your browser does not support the video tag.
-  </video>
+  <img src="assets/demo.gif" alt="axiclick demo — AI agent controlling iPhone Mirroring via SoM" width="720">
 </p>
 
 ## Why axiclick?
