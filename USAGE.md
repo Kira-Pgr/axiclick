@@ -9,6 +9,7 @@ brew install cliclick
 npm install -g axiclick
 axiclick som-setup           # one-time: installs OmniParser (~2GB)
 axiclick som-start           # start model server (keeps models warm)
+axiclick active              # verify the real frontmost window before SoM
 ```
 
 ## Strategy: How to Automate Any App
@@ -20,12 +21,17 @@ axiclick som-start           # start model server (keeps models warm)
 ```
 1. axiclick focus <app>              # bring app to front
 2. axiclick wait 500                 # let it render
-3. axiclick som /tmp/s.png           # detect all UI elements
-4. <read the annotated screenshot>   # identify target element by @id
-5. axiclick som-click @<id>          # click it
-6. axiclick wait 500                 # let the action complete
-7. axiclick screenshot /tmp/v.png    # verify the result
+3. axiclick active                   # confirm the window you expect is active
+4. axiclick som /tmp/s.png           # detect all UI elements
+5. <read the annotated screenshot>   # identify target element by @id
+6. axiclick som-click @<id>          # click it
+7. axiclick wait 500                 # let the action complete
+8. axiclick screenshot /tmp/v.png    # verify the result
 ```
+
+If `focus` brings an app forward but the actionable surface is inside a nested
+window, like iPhone Mirroring, click once inside that window before the next
+`som` pass.
 
 ### When to use each perception method
 
@@ -42,6 +48,7 @@ axiclick som-start           # start model server (keeps models warm)
 - **Repeated SoM calls.** Run `som` once, plan all clicks, then execute. Use `screenshot` for quick checks between actions.
 - **Forgetting `wait`.** After `focus`, `click`, or `som-click`, wait 300-500ms before the next perception command.
 - **Ignoring `som-start`.** Cold SoM takes ~15s. With `som-start`, it takes ~1.5s.
+- **Assuming app focus means input focus.** Check `axiclick active` for the real frontmost window and `axiclick focused` before typing into important fields.
 - **Using keyboard shortcuts (`combo`, `keydown`).** Shortcuts get intercepted by the wrong app, trigger unexpected actions, or vary between apps. Prefer clicking UI elements directly with `som-click`. Only use `key return` and `key esc` which are universally safe.
 - **Clicking text labels on phone screens.** SoM detects app name labels (tiny text below icons). The clickable icon is ~20px above the label. Adjust y coordinate upward when targeting app icons.
 
@@ -98,6 +105,10 @@ marks[145]{id,kind,label,x,y,w,h}:
 All coordinates are **screen-ready** — use them directly with `click` or `som-click`. Retina scaling is handled automatically.
 
 The element list is saved to `~/.axiclick/last-som.json` for use by `som-click`.
+
+`som` captures the current desktop view, not just a single app subtree. When
+working with a small target window, use `axiclick windows` and `axiclick active`
+to confirm the correct surface is frontmost before relying on the marks.
 
 #### `som-click @<id>`
 
@@ -165,6 +176,20 @@ axiclick type "Hello world"
 ```
 
 **Important:** The target text field must be focused first. Use `som-click` or `click` to focus it before typing.
+
+#### `submit [--at <x>,<y>]`
+
+Submit the current text input. Useful on sites that keep autocomplete or
+suggestion popovers open after typing.
+
+```bash
+axiclick type "my query"
+axiclick submit
+axiclick submit --at 500,467
+```
+
+`submit` waits briefly, clicks away to dismiss suggestions, re-focuses the
+input, and then presses Return.
 
 #### `key <key>`
 
@@ -301,6 +326,17 @@ Sample the pixel color at a position. Returns RGB + hex.
 axiclick color 100,200
 axiclick color .             # at current mouse position
 ```
+
+#### `focused`
+
+Show the UI element that currently has keyboard focus.
+
+```bash
+axiclick focused
+```
+
+Use this to verify a real text field is active before calling `type` or
+`submit`.
 
 ### Accessibility (AXUIElement)
 
@@ -477,6 +513,8 @@ Always run `axiclick som-start` at the beginning of a session.
 **Accessibility permissions** — Go to System Settings > Privacy & Security > Accessibility and enable your terminal app.
 
 **Special keys still do nothing in browsers** — macOS may prompt for Automation access the first time `axiclick key return` or `axiclick key tab` talks to `System Events`. Approve it in System Settings > Privacy & Security > Automation for your terminal app.
+
+**SoM marks the wrong window** — Run `axiclick active` first. If the app is frontmost but the actionable surface is inside a child window like iPhone Mirroring, click inside that window once and rerun `som`.
 
 **Clicking wrong elements** — Always use `som` + `som-click @<id>` instead of guessing coordinates. Read the annotated screenshot to verify which element has which ID.
 
