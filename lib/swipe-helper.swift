@@ -1,105 +1,397 @@
 import Cocoa
+import Foundation
+import Darwin
 
 // swipe-helper: Two swipe modes
 // Usage:
 //   swipe-helper touch <x> <y> <dx> <dy> [duration_ms]   — click-hold-drag (iPhone style)
-//   swipe-helper gesture <direction>                       — trackpad gesture (macOS workspace)
+//   swipe-helper gesture <direction>                      — Mission Control workspace switch
+
+enum SwipeHelperError: Error, LocalizedError {
+    case message(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .message(let text):
+            return text
+        }
+    }
+}
+
+struct ManagedDisplaySpace {
+    let identifier: String
+    let currentSpaceID: UInt64
+    let spaces: [ManagedSpace]
+}
+
+struct ManagedSpace {
+    let id: UInt64
+    let label: String
+}
+
+struct MissionControlSpace {
+    let element: AXUIElement
+    let label: String
+}
+
+typealias SLSMainConnectionIDFn = @convention(c) () -> Int32
+typealias SLSCopyManagedDisplaySpacesFn = @convention(c) (Int32) -> Unmanaged<CFArray>?
+typealias SLSGetActiveSpaceFn = @convention(c) (Int32) -> UInt64
+
+struct SkyLightAPI {
+    let handle: UnsafeMutableRawPointer
+    let mainConnectionID: SLSMainConnectionIDFn
+    let copyManagedDisplaySpaces: SLSCopyManagedDisplaySpacesFn
+    let getActiveSpace: SLSGetActiveSpaceFn
+}
+
+func loadSkyLight() throws -> SkyLightAPI {
+    let path = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
+    guard let handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL) else {
+        let message = dlerror().map { String(cString: $0) } ?? "unknown"
+        throw SwipeHelperError.message("error: unable to load SkyLight (\(message))")
+    }
+
+    func symbol<T>(_ name: String, as _: T.Type) throws -> T {
+        guard let raw = dlsym(handle, name) else {
+            throw SwipeHelperError.message("error: missing SkyLight symbol \(name)")
+        }
+        return unsafeBitCast(raw, to: T.self)
+    }
+
+    return SkyLightAPI(
+        handle: handle,
+        mainConnectionID: try symbol("SLSMainConnectionID", as: SLSMainConnectionIDFn.self),
+        copyManagedDisplaySpaces: try symbol("SLSCopyManagedDisplaySpaces", as: SLSCopyManagedDisplaySpacesFn.self),
+        getActiveSpace: try symbol("SLSGetActiveSpace", as: SLSGetActiveSpaceFn.self)
+    )
+}
+
+func parseInt(_ value: Any?) -> Int? {
+    if let intValue = value as? Int { return intValue }
+    if let numberValue = value as? NSNumber { return numberValue.intValue }
+    return nil
+}
+
+func parseUInt64(_ value: Any?) -> UInt64? {
+    if let uintValue = value as? UInt64 { return uintValue }
+    if let intValue = value as? Int { return intValue >= 0 ? UInt64(intValue) : nil }
+    if let numberValue = value as? NSNumber { return numberValue.uint64Value }
+    return nil
+}
+
+func managedSpace(from value: [String: Any]) -> ManagedSpace? {
+    guard let id = parseUInt64(value["ManagedSpaceID"] ?? value["id64"]) else { return nil }
+
+    let type = parseInt(value["type"]) ?? -1
+    if type == 0 {
+        return ManagedSpace(id: id, label: "desktop")
+    }
+
+    let tileSpaces = ((value["TileLayoutManager"] as? [String: Any])?["TileSpaces"] as? [[String: Any]]) ?? []
+    if let tile = tileSpaces.first {
+        if let appName = tile["appName"] as? String, !appName.isEmpty {
+            return ManagedSpace(id: id, label: "fullscreen:\(appName)")
+        }
+        if let name = tile["name"] as? String, !name.isEmpty {
+            return ManagedSpace(id: id, label: "fullscreen:\(name)")
+        }
+    }
+
+    if let name = value["name"] as? String, !name.isEmpty {
+        return ManagedSpace(id: id, label: "space:\(name)")
+    }
+
+    return ManagedSpace(id: id, label: "type:\(type)")
+}
+
+func loadManagedDisplaySpaces(_ skylight: SkyLightAPI) throws -> [ManagedDisplaySpace] {
+    let connection = skylight.mainConnectionID()
+    guard let rawDisplays = skylight.copyManagedDisplaySpaces(connection)?.takeRetainedValue() as? [[String: Any]] else {
+        throw SwipeHelperError.message("error: unable to read managed display spaces")
+    }
+
+    return rawDisplays.compactMap { display in
+        guard let identifier = display["Display Identifier"] as? String else { return nil }
+        let currentSpace = display["Current Space"] as? [String: Any]
+        let currentSpaceID = parseUInt64(currentSpace?["ManagedSpaceID"] ?? currentSpace?["id64"]) ?? 0
+        let spaces = (display["Spaces"] as? [[String: Any]] ?? []).compactMap(managedSpace(from:))
+        return ManagedDisplaySpace(identifier: identifier, currentSpaceID: currentSpaceID, spaces: spaces)
+    }
+}
+
+func orderedDisplayIDs() -> [CGDirectDisplayID] {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var count: UInt32 = 0
+    let err = CGGetActiveDisplayList(UInt32(ids.count), &ids, &count)
+    guard err == .success else { return [CGMainDisplayID()] }
+
+    var ordered = Array(ids.prefix(Int(count)))
+    let mainID = CGMainDisplayID()
+    if let mainIndex = ordered.firstIndex(of: mainID), mainIndex != 0 {
+        ordered.remove(at: mainIndex)
+        ordered.insert(mainID, at: 0)
+    }
+    return ordered
+}
+
+func displayID(forManagedIdentifier identifier: String) -> CGDirectDisplayID? {
+    for displayID in orderedDisplayIDs() {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else { continue }
+        let uuidString = CFUUIDCreateString(nil, uuid) as String? ?? ""
+        if uuidString == identifier { return displayID }
+    }
+    return nil
+}
+
+func axAttr(_ element: AXUIElement, _ name: String) -> AnyObject? {
+    var value: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+    guard result == .success else { return nil }
+    return value
+}
+
+func missionControlGroup() -> AXUIElement? {
+    guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
+        return nil
+    }
+    let appElement = AXUIElementCreateApplication(dock.processIdentifier)
+    let children = axAttr(appElement, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    return children.first { (axAttr($0, "AXIdentifier") as? String) == "mc" }
+}
+
+func pressKey(_ keyCode: CGKeyCode) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+    let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+    down?.post(tap: .cghidEventTap)
+    up?.post(tap: .cghidEventTap)
+}
+
+func openMissionControl() throws {
+    let appURL = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
+    guard FileManager.default.fileExists(atPath: appURL.path) else {
+        throw SwipeHelperError.message("error: Mission Control.app is unavailable")
+    }
+
+    let workspace = NSWorkspace.shared
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    let semaphore = DispatchSemaphore(value: 0)
+    var openError: Error?
+    workspace.openApplication(at: appURL, configuration: configuration) { _, error in
+        openError = error
+        semaphore.signal()
+    }
+    let waitResult = semaphore.wait(timeout: .now() + 2)
+    if waitResult == .timedOut {
+        throw SwipeHelperError.message("error: timed out waiting for Mission Control to open")
+    }
+    if let openError {
+        throw SwipeHelperError.message("error: unable to open Mission Control (\(openError.localizedDescription))")
+    }
+}
+
+func ensureMissionControlOpen() throws -> Bool {
+    if missionControlGroup() != nil { return false }
+    try openMissionControl()
+    return true
+}
+
+func waitForMissionControlGroup(timeout: TimeInterval = 2.0) -> AXUIElement? {
+    let start = Date()
+    while Date().timeIntervalSince(start) < timeout {
+        if let group = missionControlGroup() { return group }
+        usleep(50_000)
+    }
+    return nil
+}
+
+func findSpacesList(forDisplayID displayID: CGDirectDisplayID) throws -> AXUIElement {
+    guard let mcGroup = waitForMissionControlGroup() else {
+        throw SwipeHelperError.message("error: unable to get Mission Control data from the Dock")
+    }
+
+    let mcDisplays = (axAttr(mcGroup, kAXChildrenAttribute) as? [AXUIElement] ?? []).filter {
+        (axAttr($0, "AXIdentifier") as? String) == "mc.display"
+    }
+    guard let targetDisplay = mcDisplays.first(where: {
+        parseInt(axAttr($0, "AXDisplayID")) == Int(displayID)
+    }) else {
+        throw SwipeHelperError.message("error: no Mission Control display found for the active screen")
+    }
+
+    let displayChildren = axAttr(targetDisplay, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    guard let spacesGroup = displayChildren.first(where: {
+        (axAttr($0, "AXIdentifier") as? String) == "mc.spaces"
+    }) else {
+        throw SwipeHelperError.message("error: unable to locate Mission Control spaces group")
+    }
+
+    let spacesChildren = axAttr(spacesGroup, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    guard let spacesList = spacesChildren.first(where: {
+        (axAttr($0, "AXIdentifier") as? String) == "mc.spaces.list"
+    }) else {
+        throw SwipeHelperError.message("error: unable to locate Mission Control spaces list")
+    }
+
+    return spacesList
+}
+
+func missionControlSpaceLabel(for element: AXUIElement) -> String {
+    let title = axAttr(element, kAXTitleAttribute) as? String ?? ""
+    let description = axAttr(element, kAXDescriptionAttribute) as? String ?? ""
+
+    if title.hasPrefix("Desktop ") {
+        return "desktop"
+    }
+    if description.localizedCaseInsensitiveContains("full screen"), !title.isEmpty {
+        return "fullscreen:\(title)"
+    }
+    if !title.isEmpty {
+        return "space:\(title)"
+    }
+    if !description.isEmpty {
+        return "desc:\(description)"
+    }
+    return "unknown"
+}
+
+func missionControlSpaces(forDisplayID displayID: CGDirectDisplayID) throws -> [MissionControlSpace] {
+    let spacesList = try findSpacesList(forDisplayID: displayID)
+    let children = axAttr(spacesList, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    return children.compactMap { child in
+        let role = axAttr(child, kAXRoleAttribute) as? String ?? ""
+        guard role == kAXButtonRole as String else { return nil }
+        return MissionControlSpace(element: child, label: missionControlSpaceLabel(for: child))
+    }
+}
+
+func switchWorkspace(direction: String) throws {
+    guard direction == "left" || direction == "right" else {
+        throw SwipeHelperError.message("error: workspace gesture requires left or right")
+    }
+
+    let skylight = try loadSkyLight()
+    let connection = skylight.mainConnectionID()
+    let activeSpaceID = skylight.getActiveSpace(connection)
+    let managedDisplays = try loadManagedDisplaySpaces(skylight)
+    guard let activeDisplay = managedDisplays.first(where: { $0.currentSpaceID == activeSpaceID || $0.spaces.contains(where: { $0.id == activeSpaceID }) }) else {
+        throw SwipeHelperError.message("error: unable to determine the active display space")
+    }
+    guard let currentIndex = activeDisplay.spaces.firstIndex(where: { $0.id == activeSpaceID }) else {
+        throw SwipeHelperError.message("error: active space not found in display order")
+    }
+
+    let targetIndex: Int
+    if direction == "right" {
+        targetIndex = currentIndex + 1
+    } else {
+        targetIndex = currentIndex - 1
+    }
+    guard targetIndex >= 0 && targetIndex < activeDisplay.spaces.count else {
+        throw SwipeHelperError.message("error: no workspace exists in that direction")
+    }
+    guard let displayID = displayID(forManagedIdentifier: activeDisplay.identifier) else {
+        throw SwipeHelperError.message("error: unable to resolve the active display")
+    }
+
+    let openedMissionControl = try ensureMissionControlOpen()
+    do {
+        usleep(350_000)
+        let spaces = try missionControlSpaces(forDisplayID: displayID)
+        guard spaces.count == activeDisplay.spaces.count else {
+            throw SwipeHelperError.message("error: Mission Control spaces do not match the active display")
+        }
+
+        let expectedLabels = activeDisplay.spaces.map { $0.label }
+        let actualLabels = spaces.map { $0.label }
+        guard expectedLabels == actualLabels else {
+            throw SwipeHelperError.message("error: Mission Control spaces are not aligned with the active display")
+        }
+
+        guard targetIndex < spaces.count else {
+            throw SwipeHelperError.message("error: target workspace thumbnail is unavailable")
+        }
+        let target = spaces[targetIndex].element
+        let result = AXUIElementPerformAction(target, kAXPressAction as CFString)
+        if result != AXError.success {
+            throw SwipeHelperError.message("error: failed to activate the target workspace")
+        }
+    } catch {
+        if openedMissionControl, missionControlGroup() != nil {
+            pressKey(53) // Escape closes Mission Control reliably.
+        }
+        throw error
+    }
+}
 
 guard CommandLine.arguments.count >= 3 else {
-    fputs("usage:\n  swipe-helper touch <x> <y> <dx> <dy> [duration_ms]\n  swipe-helper gesture left|right|up|down\n", stderr)
+    fputs("usage:\n  swipe-helper touch <x> <y> <dx> <dy> [duration_ms]\n  swipe-helper gesture left|right\n", stderr)
     exit(1)
 }
 
 let mode = CommandLine.arguments[1]
 
-switch mode {
-case "touch":
-    // Click-hold-drag: simulates a finger touch swipe (for iPhone Mirroring)
-    guard CommandLine.arguments.count >= 6,
-          let x = Double(CommandLine.arguments[2]),
-          let y = Double(CommandLine.arguments[3]),
-          let dx = Double(CommandLine.arguments[4]),
-          let dy = Double(CommandLine.arguments[5]) else {
-        fputs("error: touch requires x y dx dy\n", stderr)
-        exit(1)
-    }
-    let durationMs: Int
-    if CommandLine.arguments.count > 6 {
-        guard let parsedDuration = Int(CommandLine.arguments[6]), parsedDuration >= 0 else {
-            fputs("error: duration_ms must be a non-negative integer\n", stderr)
-            exit(1)
+do {
+    switch mode {
+    case "touch":
+        // Click-hold-drag: simulates a finger touch swipe (for iPhone Mirroring)
+        guard CommandLine.arguments.count >= 6,
+              let x = Double(CommandLine.arguments[2]),
+              let y = Double(CommandLine.arguments[3]),
+              let dx = Double(CommandLine.arguments[4]),
+              let dy = Double(CommandLine.arguments[5]) else {
+            throw SwipeHelperError.message("error: touch requires x y dx dy")
         }
-        durationMs = parsedDuration
-    } else {
-        durationMs = 300
-    }
-    let steps = 20
-    let stepDelay = useconds_t(durationMs * 1000 / steps) // microseconds per step
 
-    let start = CGPoint(x: x, y: y)
-    let end = CGPoint(x: x + dx, y: y + dy)
+        let durationMs: Int
+        if CommandLine.arguments.count > 6 {
+            guard let parsedDuration = Int(CommandLine.arguments[6]), parsedDuration >= 0 else {
+                throw SwipeHelperError.message("error: duration_ms must be a non-negative integer")
+            }
+            durationMs = parsedDuration
+        } else {
+            durationMs = 300
+        }
 
-    // Mouse down at start
-    let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
-    down?.post(tap: .cghidEventTap)
+        let steps = 20
+        let stepDelay = useconds_t(durationMs * 1000 / steps) // microseconds per step
 
-    // Brief hold before moving — short enough to avoid long-press (app edit mode)
-    // but long enough for touch registration
-    usleep(50_000) // 50ms hold
+        let start = CGPoint(x: x, y: y)
+        let end = CGPoint(x: x + dx, y: y + dy)
 
-    // Smooth drag
-    for i in 1...steps {
-        let t = Double(i) / Double(steps)
-        let px = start.x + (end.x - start.x) * t
-        let py = start.y + (end.y - start.y) * t
-        let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: px, y: py), mouseButton: .left)
-        drag?.post(tap: .cghidEventTap)
-        usleep(stepDelay)
-    }
+        // Mouse down at start
+        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
 
-    // Mouse up at end
-    let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
-    up?.post(tap: .cghidEventTap)
+        // Brief hold before moving — short enough to avoid long-press (app edit mode)
+        // but long enough for touch registration
+        usleep(50_000) // 50ms hold
 
-case "gesture":
-    // Trackpad swipe gesture for macOS workspace switching
-    guard CommandLine.arguments.count >= 3 else {
-        fputs("error: gesture requires direction\n", stderr)
-        exit(1)
-    }
-    let direction = CommandLine.arguments[2]
+        // Smooth drag
+        for i in 1...steps {
+            let t = Double(i) / Double(steps)
+            let px = start.x + (end.x - start.x) * t
+            let py = start.y + (end.y - start.y) * t
+            let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: CGPoint(x: px, y: py), mouseButton: .left)
+            drag?.post(tap: .cghidEventTap)
+            usleep(stepDelay)
+        }
 
-    // Use NSEvent to post a swipe gesture
-    // Unfortunately CGEvent doesn't directly support trackpad gestures,
-    // so we use the private CGS API via keyboard shortcuts instead:
-    // Ctrl+Arrow keys switch workspaces (built-in macOS shortcut)
-    let keyCode: CGKeyCode
-    switch direction {
-    case "left":
-        keyCode = 123 // left arrow
-    case "right":
-        keyCode = 124 // right arrow
-    case "up":
-        keyCode = 126 // up arrow (Mission Control)
-    case "down":
-        keyCode = 125 // down arrow
+        // Mouse up at end
+        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
+        up?.post(tap: .cghidEventTap)
+
+    case "gesture":
+        let direction = CommandLine.arguments[2]
+        try switchWorkspace(direction: direction)
+
     default:
-        fputs("error: direction must be left, right, up, or down\n", stderr)
-        exit(1)
+        throw SwipeHelperError.message("error: unknown mode '\(mode)', use 'touch' or 'gesture'")
     }
-
-    // Ctrl+Arrow to switch workspace
-    let downEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true)
-    downEvent?.flags = .maskControl
-    downEvent?.post(tap: .cghidEventTap)
-
-    usleep(50_000)
-
-    let upEvent = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false)
-    upEvent?.flags = .maskControl
-    upEvent?.post(tap: .cghidEventTap)
-
-default:
-    fputs("error: unknown mode '\(mode)', use 'touch' or 'gesture'\n", stderr)
+} catch {
+    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    fputs("\(message)\n", stderr)
     exit(1)
 }

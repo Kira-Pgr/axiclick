@@ -68,6 +68,25 @@ function confirmAction(action, details) {
   out(toon.obj('result', fields));
 }
 
+function ensureSwiftHelper(helperName) {
+  const fs = require('fs');
+  const helperPath = path.join(__dirname, '..', 'lib', helperName);
+  const srcPath = path.join(__dirname, '..', 'lib', `${helperName}.swift`);
+  const helperMissing = !fs.existsSync(helperPath);
+  const helperStale = !helperMissing && fs.existsSync(srcPath) &&
+    fs.statSync(srcPath).mtimeMs > fs.statSync(helperPath).mtimeMs;
+
+  if (helperMissing || helperStale) {
+    const { runShell } = require('../lib/exec');
+    const compileResult = runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
+    if (typeof compileResult === 'object' && compileResult.error) {
+      die(`Failed to compile ${helperName}: ${compileResult.error}`);
+    }
+  }
+
+  return helperPath;
+}
+
 // ── Commands ─────────────────────────────────────────
 
 const commands = {};
@@ -405,16 +424,8 @@ commands['snapshot'] = function cmdSnapshot(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--depth' && args[i + 1]) depth = args[++i];
   }
-  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const helperPath = ensureSwiftHelper('ax-helper');
   const { run: execRun } = require('../lib/exec');
-  const fs = require('fs');
-  if (!fs.existsSync(helperPath)) {
-    // Compile on first use
-    const { runShell } = require('../lib/exec');
-    const srcPath = path.join(__dirname, '..', 'lib', 'ax-helper.swift');
-    const compileResult = runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
-    if (typeof compileResult === 'object' && compileResult.error) die('Failed to compile ax-helper: ' + compileResult.error);
-  }
   const result = execRun(helperPath, ['snapshot', depth], { timeout: 15000 });
   if (typeof result === 'object' && result.error) die(result.error);
   out(result);
@@ -432,7 +443,7 @@ commands['ax-click'] = function cmdAxClick(args) {
   }
   const uid = (args[0] || '').replace('@', '');
   if (!uid || isNaN(+uid)) die('Expected @uid', ['Run `axiclick snapshot` first, then `axiclick ax-click @<uid>`']);
-  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const helperPath = ensureSwiftHelper('ax-helper');
   const { run: execRun } = require('../lib/exec');
   const result = execRun(helperPath, ['click', uid], { timeout: 15000 });
   if (typeof result === 'object' && result.error) die(result.error);
@@ -448,7 +459,7 @@ commands['ax-fill'] = function cmdAxFill(args) {
   const text = args.slice(1).join(' ');
   if (!uid || isNaN(+uid)) die('Expected @uid', ['Run `axiclick snapshot` first, then `axiclick ax-fill @<uid> "<text>"`']);
   if (!text) die('Expected text', ['Run `axiclick ax-fill @<uid> "<text>"`']);
-  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const helperPath = ensureSwiftHelper('ax-helper');
   const { run: execRun } = require('../lib/exec');
   const result = execRun(helperPath, ['fill', uid, text], { timeout: 15000 });
   if (typeof result === 'object' && result.error) die(result.error);
@@ -492,7 +503,7 @@ commands['focused'] = function cmdFocused(args) {
     out(`usage: axiclick focused\n\nShow which UI element currently has keyboard focus.\nReports role, label, value, position, and whether it's editable.\nUse to verify a text field is active before typing.\n\nExamples:\n  axiclick focused`);
     return;
   }
-  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const helperPath = ensureSwiftHelper('ax-helper');
   const { run: execRun } = require('../lib/exec');
   const result = execRun(helperPath, ['focused'], { timeout: 5000 });
   if (typeof result === 'object' && result.error) die(result.error);
@@ -526,51 +537,35 @@ commands['scroll'] = function cmdScroll(args) {
   else if (dir === 'left') dx = amount;
   else if (dir === 'right') dx = -amount;
   const { run: execRun } = require('../lib/exec');
-  const helperPath = path.join(__dirname, '..', 'lib', 'scroll-helper');
-  const fs = require('fs');
-  let result;
-  if (fs.existsSync(helperPath)) {
-    result = execRun(helperPath, [String(dy), String(dx)]);
-  } else {
-    // Fallback: compile on first use
-    const { runShell } = require('../lib/exec');
-    const srcPath = path.join(__dirname, '..', 'lib', 'scroll-helper.swift');
-    runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
-    result = execRun(helperPath, [String(dy), String(dx)]);
-  }
+  const helperPath = ensureSwiftHelper('scroll-helper');
+  const result = execRun(helperPath, [String(dy), String(dx)]);
   if (typeof result === 'object' && result.error) die(result.error);
   confirmAction('scroll', { direction: dir, amount });
 };
 
 commands['swipe'] = function cmdSwipe(args) {
   if (args[0] === '--help') {
-    out(`usage: axiclick swipe <direction> [--at <x>,<y>] [--distance <px>] [--duration <ms>]\n       axiclick swipe workspace <direction>\n\nTwo modes:\n  Touch swipe: click-hold-drag for touch interfaces (iPhone Mirroring).\n  Workspace swipe: switch macOS desktop/workspace.\n\nDirections: left, right, up, down, next (=left), prev (=right)\n\nFlags:\n  --at <x>,<y>       Starting position (default: screen center)\n  --distance <px>    Swipe distance in pixels (default: 200)\n  --duration <ms>    Swipe duration (default: 300)\n\nExamples:\n  axiclick swipe next --at 1050,450                   # swipe to next page\n  axiclick swipe prev --at 1050,450                   # swipe to previous page\n  axiclick swipe workspace next                        # next desktop\n  axiclick swipe workspace prev                        # previous desktop`);
+    out(`usage: axiclick swipe <direction> [--at <x>,<y>] [--distance <px>] [--duration <ms>]\n       axiclick swipe workspace next|prev\n\nTwo modes:\n  Touch swipe: click-hold-drag for touch interfaces (iPhone Mirroring).\n  Workspace swipe: switch macOS desktop/workspace.\n\nTouch directions: left, right, up, down, next (=left), prev (=right)\nWorkspace directions: next, prev\n\nFlags:\n  --at <x>,<y>       Starting position (default: screen center)\n  --distance <px>    Swipe distance in pixels (default: 200)\n  --duration <ms>    Swipe duration (default: 300)\n\nExamples:\n  axiclick swipe next --at 1050,450                   # swipe to next page\n  axiclick swipe prev --at 1050,450                   # swipe to previous page\n  axiclick swipe workspace next                        # next desktop\n  axiclick swipe workspace prev                        # previous desktop`);
     return;
   }
 
-  const helperPath = path.join(__dirname, '..', 'lib', 'swipe-helper');
-  const fs = require('fs');
-  if (!fs.existsSync(helperPath)) {
-    const { runShell } = require('../lib/exec');
-    const srcPath = path.join(__dirname, '..', 'lib', 'swipe-helper.swift');
-    runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
-  }
+  const helperPath = ensureSwiftHelper('swipe-helper');
 
   const { run: execRun } = require('../lib/exec');
 
-  // Workspace swipe mode — use the native helper so Ctrl+Arrow is posted
-  // as a single CGEvent sequence instead of mixing modifier state across
-  // different input backends.
+  // Workspace swipe mode — use the native helper to open Mission Control
+  // and activate the adjacent space thumbnail on the active display.
   if (args[0] === 'workspace') {
-    let dir = args[1];
-    if (dir === 'next') dir = 'right';
-    if (dir === 'prev') dir = 'left';
-    if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
-      die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe workspace next`']);
+    const requested = args[1];
+    let dir;
+    if (requested === 'next') dir = 'right';
+    if (requested === 'prev') dir = 'left';
+    if (!dir) {
+      die('Expected direction: next, prev', ['Run `axiclick swipe workspace next`']);
     }
     const result = execRun(helperPath, ['gesture', dir]);
     if (typeof result === 'object' && result.error) die(result.error);
-    confirmAction('swipe-workspace', { direction: dir });
+    confirmAction('swipe-workspace', { direction: requested });
     return;
   }
 
