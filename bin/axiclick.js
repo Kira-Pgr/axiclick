@@ -161,6 +161,7 @@ commands[''] = function home() {
     'Run `axiclick screenshot <path>` to capture the screen',
     'Run `axiclick windows` to list open windows',
     'Run `axiclick <command> --help` for details on any command',
+    'Invoke the /axiclick skill before desktop automation tasks for workflow discipline',
   ]));
 
   out(toon.section(parts));
@@ -1248,6 +1249,12 @@ commands['install'] = function cmdInstall(args) {
     'claude-code': results.claude,
     codex: results.codex,
   }));
+  if (results.skill) {
+    out(toon.obj('skill', {
+      status: results.skill,
+      path: '~/.claude/skills/axiclick/SKILL.md',
+    }));
+  }
 };
 
 // ── Help ─────────────────────────────────────────────
