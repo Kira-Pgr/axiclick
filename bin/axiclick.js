@@ -38,6 +38,30 @@ function checkCliclick() {
   }
 }
 
+function mainDisplay(displays) {
+  return Array.isArray(displays) ? (displays.find(d => d.main) || displays[0] || null) : null;
+}
+
+function displayForPoint(displays, x, y) {
+  if (!Array.isArray(displays)) return null;
+  return displays.find(d => (
+    x >= d.x &&
+    x < d.x + d.width &&
+    y >= d.y &&
+    y < d.y + d.height
+  )) || null;
+}
+
+function windowCenter(win) {
+  if (!win) return null;
+  if (![win.x, win.y, win.w, win.h].every(Number.isFinite)) return null;
+  if (win.w <= 0 || win.h <= 0) return null;
+  return {
+    x: win.x + Math.round(win.w / 2),
+    y: win.y + Math.round(win.h / 2),
+  };
+}
+
 function confirmAction(action, details) {
   const fields = { action };
   if (details) Object.assign(fields, details);
@@ -77,7 +101,7 @@ commands[''] = function home() {
 
   // Display info
   if (Array.isArray(disps) && disps.length) {
-    const main = disps.find(d => d.main) || disps[0];
+    const main = mainDisplay(disps);
     parts.push(toon.obj('screen', {
       resolution: `${main.width}x${main.height}`,
       retina: main.retina ? 'yes' : 'no',
@@ -362,12 +386,14 @@ commands['screen'] = function cmdScreen(args) {
   if (typeof disps === 'object' && disps.error) die(disps.error);
   if (!disps.length) { out('screen: no displays detected'); return; }
   out(toon.table('displays', disps.map((d, i) => ({
-    id: i + 1,
+    id: d.id || i + 1,
     name: d.name || 'Display',
+    origin: `${d.x},${d.y}`,
     resolution: `${d.width}x${d.height}`,
+    scale: String(d.scale || 1),
     retina: d.retina ? 'yes' : 'no',
     main: d.main ? 'yes' : 'no',
-  })), ['id', 'name', 'resolution', 'retina', 'main']));
+  })), ['id', 'name', 'origin', 'resolution', 'scale', 'retina', 'main']));
 };
 
 commands['snapshot'] = function cmdSnapshot(args) {
@@ -429,6 +455,50 @@ commands['ax-fill'] = function cmdAxFill(args) {
   out(result);
 };
 
+commands['submit'] = function cmdSubmit(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick submit [--at <x>,<y>]\n\nSubmit the current text input. Dismisses autocomplete by clicking\naway, then re-clicks the input and presses Enter.\n\nIf --at is provided, uses those coordinates for the input field.\nOtherwise uses the last click position.\n\nExamples:\n  axiclick type "my query"\n  axiclick submit\n  axiclick submit --at 500,467`);
+    return;
+  }
+  checkCliclick();
+
+  // Get current mouse position (where the input field is)
+  const pos = cliclick.getPosition();
+
+  // Parse optional --at override
+  let inputX = pos.x, inputY = pos.y;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--at' && args[i + 1]) {
+      const coords = parseCoords(args[++i]);
+      if (coords) { inputX = +coords[0]; inputY = +coords[1]; }
+    }
+  }
+
+  // 1. Wait for JS to process last keystrokes
+  cliclick.wait('200');
+  // 2. Click away to dismiss autocomplete (50px above input)
+  cliclick.click(inputX, inputY - 50);
+  cliclick.wait('150');
+  // 3. Click back on the input to refocus
+  cliclick.click(inputX, inputY);
+  cliclick.wait('150');
+  // 4. Press Enter
+  cliclick.keypress('return');
+  confirmAction('submit', { position: `${inputX},${inputY}` });
+};
+
+commands['focused'] = function cmdFocused(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick focused\n\nShow which UI element currently has keyboard focus.\nReports role, label, value, position, and whether it's editable.\nUse to verify a text field is active before typing.\n\nExamples:\n  axiclick focused`);
+    return;
+  }
+  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(helperPath, ['focused'], { timeout: 5000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+};
+
 commands['scroll'] = function cmdScroll(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick scroll <direction> [<amount>] [--at <x>,<y>]\n\nScroll in the given direction. Amount defaults to 5 (lines).\nDirections: up, down, left, right\n\nFlags:\n  --at <x>,<y>  Scroll at a specific position (moves mouse first)\n\nExamples:\n  axiclick scroll down\n  axiclick scroll up 10\n  axiclick scroll down 3 --at 500,400`);
@@ -472,6 +542,112 @@ commands['scroll'] = function cmdScroll(args) {
   confirmAction('scroll', { direction: dir, amount });
 };
 
+commands['swipe'] = function cmdSwipe(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick swipe <direction> [--at <x>,<y>] [--distance <px>] [--duration <ms>]\n       axiclick swipe workspace <direction>\n\nTwo modes:\n  Touch swipe: click-hold-drag for touch interfaces (iPhone Mirroring).\n  Workspace swipe: switch macOS desktop/workspace.\n\nDirections: left, right, up, down, next (=left), prev (=right)\n\nFlags:\n  --at <x>,<y>       Starting position (default: screen center)\n  --distance <px>    Swipe distance in pixels (default: 200)\n  --duration <ms>    Swipe duration (default: 300)\n\nExamples:\n  axiclick swipe next --at 1050,450                   # swipe to next page\n  axiclick swipe prev --at 1050,450                   # swipe to previous page\n  axiclick swipe workspace next                        # next desktop\n  axiclick swipe workspace prev                        # previous desktop`);
+    return;
+  }
+
+  const helperPath = path.join(__dirname, '..', 'lib', 'swipe-helper');
+  const fs = require('fs');
+  if (!fs.existsSync(helperPath)) {
+    const { runShell } = require('../lib/exec');
+    const srcPath = path.join(__dirname, '..', 'lib', 'swipe-helper.swift');
+    runShell(`swiftc -O "${srcPath}" -o "${helperPath}"`, { timeout: 60000 });
+  }
+
+  const { run: execRun } = require('../lib/exec');
+
+  // Workspace swipe mode — use the native helper so Ctrl+Arrow is posted
+  // as a single CGEvent sequence instead of mixing modifier state across
+  // different input backends.
+  if (args[0] === 'workspace') {
+    let dir = args[1];
+    if (dir === 'next') dir = 'right';
+    if (dir === 'prev') dir = 'left';
+    if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
+      die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe workspace next`']);
+    }
+    const result = execRun(helperPath, ['gesture', dir]);
+    if (typeof result === 'object' && result.error) die(result.error);
+    confirmAction('swipe-workspace', { direction: dir });
+    return;
+  }
+
+  // Touch swipe mode
+  let dir = args[0];
+  if (dir === 'next') dir = 'left';   // next page = drag left
+  if (dir === 'prev') dir = 'right';  // prev page = drag right
+  if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
+    die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe next [--at <x>,<y>]`', 'Run `axiclick swipe workspace next`']);
+  }
+
+  let atX = 756, atY = 491; // default: screen center
+  let distance = 200;
+  let duration = 300;
+
+  // Default to the active window center when possible; fall back to the
+  // main display center using global display bounds.
+  const disps = screen.displays();
+  const act = screen.active();
+  const center = act && !act.error ? windowCenter(act) : null;
+  if (center) {
+    atX = center.x;
+    atY = center.y;
+  } else if (Array.isArray(disps) && disps.length) {
+    const main = mainDisplay(disps);
+    atX = main.x + Math.round(main.width / 2);
+    atY = main.y + Math.round(main.height / 2);
+  }
+
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === '--at' && args[i + 1]) {
+      const coords = parseCoords(args[++i]);
+      if (coords) { atX = +coords[0]; atY = +coords[1]; }
+    } else if (args[i] === '--distance' && args[i + 1]) {
+      distance = +args[++i];
+    } else if (args[i] === '--duration' && args[i + 1]) {
+      duration = +args[++i];
+    }
+  }
+
+  let dx = 0, dy = 0;
+  if (dir === 'left') dx = -distance;
+  else if (dir === 'right') dx = distance;
+  else if (dir === 'up') dy = -distance;
+  else if (dir === 'down') dy = distance;
+
+  const result = execRun(helperPath, ['touch', String(atX), String(atY), String(dx), String(dy), String(duration)]);
+  if (typeof result === 'object' && result.error) die(result.error);
+  confirmAction('swipe', { direction: dir, from: `${atX},${atY}`, distance, duration: `${duration}ms` });
+};
+
+commands['browse'] = function cmdBrowse(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick browse <url> [--app <browser>]\n\nOpen a URL in a browser. Uses real mouse/keyboard events — no CDP,\nno automation flags, invisible to anti-bot systems.\n\nFlags:\n  --app <name>  Open in specific browser (default: system default)\n\nExamples:\n  axiclick browse https://perplexity.ai\n  axiclick browse https://example.com --app Safari\n  axiclick browse https://google.com --app "Google Chrome"`);
+    return;
+  }
+  let url = null;
+  let app = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--app' && args[i + 1]) { app = args[++i]; }
+    else if (!args[i].startsWith('--')) { url = args[i]; }
+  }
+  if (!url) die('Expected URL', ['Run `axiclick browse <url>`']);
+  // Ensure URL has protocol
+  if (!url.includes('://')) url = 'https://' + url;
+  const { run: execRun } = require('../lib/exec');
+  const openArgs = app ? ['-a', app, url] : [url];
+  const result = execRun('open', openArgs, { timeout: 10000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  confirmAction('browse', { url, ...(app ? { app } : {}) });
+  out(toon.help([
+    'Run `axiclick wait 2000` to let the page load',
+    'Run `axiclick som /tmp/page.png` to detect page elements',
+    'Use `axiclick som-click @<id>` to interact — no bot detection',
+  ]));
+};
+
 commands['focus'] = function cmdFocus(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick focus <app-name>\n\nBring an application to the foreground.\n\nExamples:\n  axiclick focus Safari\n  axiclick focus "Google Chrome"\n  axiclick focus Finder`);
@@ -509,6 +685,396 @@ commands['run'] = function cmdRun(args) {
   const result = cliclick.raw(raw);
   if (typeof result === 'object' && result.error) die(result.error);
   confirmAction('run', { commands: raw });
+};
+
+// ── SoM (Set-of-Mark) via OmniParser ─────────────────
+
+const AXICLICK_DIR = path.join(os.homedir(), '.axiclick');
+const SOM_VENV = path.join(AXICLICK_DIR, 'venv');
+const SOM_MODELS = path.join(AXICLICK_DIR, 'models');
+const SOM_PYTHON = path.join(SOM_VENV, 'bin', 'python3');
+const SOM_CLI = path.join(__dirname, '..', 'lib', 'omniparser_cli.py');
+
+function somReady() {
+  const fs = require('fs');
+  return fs.existsSync(SOM_PYTHON) &&
+    fs.existsSync(path.join(SOM_MODELS, 'icon_detect', 'model.pt')) &&
+    fs.existsSync(path.join(SOM_MODELS, 'icon_caption_florence', 'model.safetensors'));
+}
+
+commands['som-setup'] = function cmdSomSetup(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-setup\n\nSet up OmniParser V2 for Set-of-Mark element detection.\nCreates ~/.axiclick/ with a Python venv and downloads models from HuggingFace.\nRequires ~2GB disk space. Run once.\n\nExamples:\n  axiclick som-setup`);
+    return;
+  }
+  const fs = require('fs');
+  const { runShell } = require('../lib/exec');
+
+  // 1. Create directory
+  fs.mkdirSync(AXICLICK_DIR, { recursive: true });
+  out('som-setup:');
+
+  // 2. Create venv
+  if (!fs.existsSync(SOM_PYTHON)) {
+    out('  step: creating Python venv...');
+    const venvResult = runShell(`python3 -m venv "${SOM_VENV}"`, { timeout: 30000 });
+    if (typeof venvResult === 'object' && venvResult.error) die('Failed to create venv: ' + venvResult.error);
+  } else {
+    out('  step: venv exists');
+  }
+
+  // 3. Install deps
+  out('  step: installing dependencies (this may take a few minutes)...');
+  const reqPath = path.join(__dirname, '..', 'lib', 'omniparser_requirements.txt');
+  const pipResult = runShell(
+    `"${SOM_PYTHON}" -m pip install --quiet -r "${reqPath}"`,
+    { timeout: 600000 }
+  );
+  if (typeof pipResult === 'object' && pipResult.error) {
+    die('Failed to install dependencies: ' + pipResult.error);
+  }
+  out('  step: dependencies installed');
+
+  // 4. Download models
+  const yoloModel = path.join(SOM_MODELS, 'icon_detect', 'model.pt');
+  const captionModel = path.join(SOM_MODELS, 'icon_caption_florence', 'model.safetensors');
+
+  if (!fs.existsSync(yoloModel) || !fs.existsSync(captionModel)) {
+    out('  step: downloading OmniParser V2 models from HuggingFace (~2GB)...');
+    fs.mkdirSync(path.join(SOM_MODELS, 'icon_detect'), { recursive: true });
+    fs.mkdirSync(path.join(SOM_MODELS, 'icon_caption_florence'), { recursive: true });
+
+    // Download using huggingface_hub from the venv
+    const dlScript = `
+import os
+from huggingface_hub import hf_hub_download
+
+models_dir = "${SOM_MODELS.replace(/"/g, '\\"')}"
+
+# Icon detection model
+for f in ["model.pt", "model.yaml", "train_args.yaml"]:
+    hf_hub_download("microsoft/OmniParser-v2.0", f"icon_detect/{f}",
+                    local_dir=models_dir, local_dir_use_symlinks=False)
+
+# Caption model (Florence2)
+for f in ["config.json", "generation_config.json", "model.safetensors"]:
+    hf_hub_download("microsoft/OmniParser-v2.0", f"icon_caption/{f}",
+                    local_dir=models_dir, local_dir_use_symlinks=False)
+
+# Rename icon_caption -> icon_caption_florence if needed
+src = os.path.join(models_dir, "icon_caption")
+dst = os.path.join(models_dir, "icon_caption_florence")
+if os.path.exists(src) and not os.path.exists(dst):
+    os.rename(src, dst)
+elif os.path.exists(src) and os.path.exists(dst):
+    import shutil
+    for f in os.listdir(src):
+        shutil.move(os.path.join(src, f), os.path.join(dst, f))
+    os.rmdir(src)
+
+print("done")
+`.trim();
+
+    const dlResult = runShell(
+      `"${SOM_PYTHON}" -c '${dlScript.replace(/'/g, "'\\''")}'`,
+      { timeout: 600000 }
+    );
+    if (typeof dlResult === 'object' && dlResult.error) {
+      die('Failed to download models: ' + dlResult.error);
+    }
+
+    // Download Florence2 processor files (tokenizer, preprocessor)
+    const procScript = `
+from transformers import AutoProcessor
+proc = AutoProcessor.from_pretrained("microsoft/Florence-2-base-ft", trust_remote_code=True)
+proc.save_pretrained("${SOM_MODELS.replace(/"/g, '\\"')}/icon_caption_florence")
+print("done")
+`.trim();
+    out('  step: downloading Florence2 processor...');
+    const procResult = runShell(
+      `"${SOM_PYTHON}" -c '${procScript.replace(/'/g, "'\\''")}'`,
+      { timeout: 120000 }
+    );
+    if (typeof procResult === 'object' && procResult.error) {
+      die('Failed to download processor: ' + procResult.error);
+    }
+
+    out('  step: models downloaded');
+  } else {
+    out('  step: models exist');
+  }
+
+  out('  status: ready');
+  out(toon.help([
+    'Run `axiclick som <output-path>` to take a SoM-annotated screenshot',
+    'Run `axiclick som /tmp/som.png` to try it out',
+  ]));
+};
+
+const LAST_SOM_JSON = path.join(AXICLICK_DIR, 'last-som.json');
+const SOM_SOCK = path.join(AXICLICK_DIR, 'som.sock');
+const SOM_SERVER = path.join(__dirname, '..', 'lib', 'omniparser_server.py');
+
+/** Returns true if the server socket exists and responds to a health ping. */
+function somServerRunning() {
+  const fs = require('fs');
+  if (!fs.existsSync(SOM_SOCK)) return false;
+  // Quick TCP-like probe: attempt a synchronous connection via nc
+  const { runShell } = require('../lib/exec');
+  const probe = runShell(`echo '{"action":"ping"}' | nc -U -w 1 "${SOM_SOCK}"`, { timeout: 3000 });
+  return typeof probe === 'string' && probe.includes('pong');
+}
+
+commands['som'] = function cmdSom(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som <output-path> [--display <n>] [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --display <n>        Capture a specific display; defaults to the active\n                       window's display when multiple monitors are attached\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --display 2 --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
+    return;
+  }
+
+  if (!somReady()) {
+    die('OmniParser not set up', ['Run `axiclick som-setup` first (~2GB download, one-time)']);
+  }
+
+  // Parse args
+  let outputPath = null;
+  let captureDisplay = null;
+  const passthrough = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--display') {
+      captureDisplay = +(args[++i] || NaN);
+    } else if (args[i].startsWith('--')) {
+      passthrough.push(args[i]);
+      if (args[i + 1] && !args[i + 1].startsWith('--')) {
+        passthrough.push(args[++i]);
+      }
+    } else if (!outputPath) {
+      outputPath = args[i];
+    }
+  }
+
+  if (!outputPath) die('Expected output path', ['Run `axiclick som <output-path>`']);
+  if (captureDisplay != null && !Number.isFinite(captureDisplay)) {
+    die('Expected a numeric display id after --display', ['Run `axiclick screen` to list attached displays']);
+  }
+
+  const fs = require('fs');
+  const { run: execRun } = require('../lib/exec');
+  const disps = screen.displays();
+  if (typeof disps === 'object' && disps.error) die(disps.error);
+
+  let targetDisplay = null;
+  if (Array.isArray(disps) && disps.length) {
+    if (captureDisplay != null) {
+      targetDisplay = disps.find(d => d.id === captureDisplay) || null;
+      if (!targetDisplay) {
+        die(`Display ${captureDisplay} is not available`, ['Run `axiclick screen` to list attached displays']);
+      }
+    } else if (disps.length > 1) {
+      const act = screen.active();
+      const center = act && !act.error ? windowCenter(act) : null;
+      targetDisplay = center ? displayForPoint(disps, center.x, center.y) : null;
+      if (!targetDisplay) targetDisplay = mainDisplay(disps);
+    } else {
+      targetDisplay = disps[0];
+    }
+  }
+
+  // Take screenshot first
+  const tmpScreenshot = `/tmp/axiclick-som-input-${Date.now()}.png`;
+  const ssResult = screen.screenshot(tmpScreenshot, targetDisplay ? { display: targetDisplay.id } : {});
+  if (ssResult.error) die(ssResult.error);
+
+  const scale = targetDisplay?.scale || 1;
+  const offsetX = targetDisplay?.x || 0;
+  const offsetY = targetDisplay?.y || 0;
+
+  let toonOutput;
+
+  if (somServerRunning()) {
+    // ── Server path: POST to Unix socket ──────────────────────────────────
+    const { runShell } = require('../lib/exec');
+    const req = JSON.stringify({
+      action: 'run',
+      image: tmpScreenshot,
+      output: outputPath,
+      scale,
+      offsetX,
+      offsetY,
+      passthrough,
+      jsonOut: LAST_SOM_JSON,
+    });
+    // Use nc to talk to the Unix socket (synchronous, single request)
+    const escapedReq = req.replace(/'/g, "'\\''");
+    const resp = runShell(
+      `echo '${escapedReq}' | nc -U -w 30 "${SOM_SOCK}"`,
+      { timeout: 120000 }
+    );
+    try { require('fs').unlinkSync(tmpScreenshot); } catch {}
+    if (typeof resp === 'object' && resp.error) die('Server error: ' + resp.error);
+    let parsed;
+    try { parsed = JSON.parse(resp); } catch {
+      die('Malformed server response', [resp.slice ? resp.slice(0, 200) : String(resp)]);
+    }
+    if (parsed.error) die(parsed.error);
+    toonOutput = parsed.toon;
+  } else {
+    // ── Cold-start CLI path ────────────────────────────────────────────────
+    const result = execRun(SOM_PYTHON, [
+      SOM_CLI, tmpScreenshot, outputPath,
+      '--scale', String(scale),
+      '--offset-x', String(offsetX),
+      '--offset-y', String(offsetY),
+      '--json-out', LAST_SOM_JSON,
+      ...passthrough,
+    ], { timeout: 120000 });
+
+    try { fs.unlinkSync(tmpScreenshot); } catch {}
+
+    if (typeof result === 'object' && result.error) die(result.error);
+    toonOutput = result;
+  }
+
+  out(toonOutput);
+  out(toon.help([
+    'Run `axiclick som-click @<id>` to click an element by its mark ID',
+    'Run `axiclick som /tmp/som.png --no-caption` for faster detection',
+    'Run `axiclick som-start` to preload models as a background daemon',
+  ]));
+};
+
+commands['som-click'] = function cmdSomClick(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-click @<id>\n\nClick the center of a SoM element from the last \`axiclick som\` run.\nElement coordinates are read from ~/.axiclick/last-som.json.\n\nExamples:\n  axiclick som-click @3\n  axiclick som-click @12`);
+    return;
+  }
+
+  checkCliclick();
+
+  const raw = (args[0] || '').replace('@', '');
+  const id = parseInt(raw, 10);
+  if (!raw || isNaN(id) || id < 1) {
+    die('Expected @<id>', ['Run `axiclick som` first, then `axiclick som-click @<id>`']);
+  }
+
+  const fs = require('fs');
+  if (!fs.existsSync(LAST_SOM_JSON)) {
+    die('No SoM data found', ['Run `axiclick som <output-path>` first to detect elements']);
+  }
+
+  let elements;
+  try {
+    elements = JSON.parse(fs.readFileSync(LAST_SOM_JSON, 'utf8'));
+  } catch (e) {
+    die('Failed to read last-som.json: ' + e.message);
+  }
+
+  const elem = elements.find(el => el.id === id);
+  if (!elem) {
+    die(`Element @${id} not found`, [
+      `Last run detected ${elements.length} element(s): @1–@${elements.length}`,
+      'Run `axiclick som <output-path>` again to refresh',
+    ]);
+  }
+
+  // Click center of bounding box (coordinates are already screen-ready)
+  const cx = Math.round(elem.x + elem.w / 2);
+  const cy = Math.round(elem.y + elem.h / 2);
+
+  const result = cliclick.click(cx, cy);
+  if (typeof result === 'object' && result.error) die(result.error);
+
+  confirmAction('som-click', {
+    id: `@${id}`,
+    label: elem.label || `(${elem.kind})`,
+    position: `${cx},${cy}`,
+  });
+};
+
+const SOM_PID_FILE = path.join(AXICLICK_DIR, 'som-server.pid');
+
+commands['som-start'] = function cmdSomStart(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-start\n\nStart the OmniParser model-preloading daemon in the background.\nThe daemon listens on a Unix socket at ~/.axiclick/som.sock and keeps\nYOLO, EasyOCR, and Florence2 models warm, so subsequent \`axiclick som\`\ncalls avoid the cold-start penalty.\n\nExamples:\n  axiclick som-start\n  axiclick som-stop`);
+    return;
+  }
+
+  if (!somReady()) {
+    die('OmniParser not set up', ['Run `axiclick som-setup` first (~2GB download, one-time)']);
+  }
+
+  if (somServerRunning()) {
+    out(toon.obj('som-server', { status: 'already-running', socket: SOM_SOCK }));
+    return;
+  }
+
+  const fs = require('fs');
+  const { spawn } = require('child_process');
+
+  // Remove stale socket/pid if present
+  try { fs.unlinkSync(SOM_SOCK); } catch {}
+
+  const child = spawn(SOM_PYTHON, [SOM_SERVER], {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env },
+  });
+  child.unref();
+  fs.writeFileSync(SOM_PID_FILE, String(child.pid));
+
+  // Wait up to 30 s for the socket to appear and respond
+  const deadline = Date.now() + 30000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    // Busy-poll with a tight sleep via Atomics (avoids spawning another process)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    if (somServerRunning()) { ready = true; break; }
+  }
+
+  if (!ready) {
+    die('Server did not start within 30 s', [
+      'Check that OmniParser models are present: axiclick som-setup',
+      `PID file: ${SOM_PID_FILE}`,
+    ]);
+  }
+
+  out(toon.obj('som-server', {
+    status: 'started',
+    pid: child.pid,
+    socket: SOM_SOCK,
+  }));
+  out(toon.help([
+    'Run `axiclick som <output-path>` — will now use the warm server',
+    'Run `axiclick som-stop` to shut the server down',
+  ]));
+};
+
+commands['som-stop'] = function cmdSomStop(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick som-stop\n\nStop the OmniParser model-preloading daemon.\n\nExamples:\n  axiclick som-stop`);
+    return;
+  }
+
+  const fs = require('fs');
+
+  // Send shutdown request via socket first (graceful)
+  if (somServerRunning()) {
+    const { runShell } = require('../lib/exec');
+    runShell(`echo '{"action":"shutdown"}' | nc -U -w 3 "${SOM_SOCK}"`, { timeout: 5000 });
+  }
+
+  // Kill by PID if socket is gone but pid file remains
+  if (fs.existsSync(SOM_PID_FILE)) {
+    const pid = fs.readFileSync(SOM_PID_FILE, 'utf8').trim();
+    try {
+      process.kill(parseInt(pid, 10), 'SIGTERM');
+    } catch {}
+    try { fs.unlinkSync(SOM_PID_FILE); } catch {}
+  }
+
+  // Clean up socket file
+  try { fs.unlinkSync(SOM_SOCK); } catch {}
+
+  out(toon.obj('som-server', { status: 'stopped' }));
 };
 
 commands['install'] = function cmdInstall(args) {

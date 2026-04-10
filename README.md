@@ -7,7 +7,7 @@
 
 Agent-ergonomic macOS mouse, keyboard, and screen automation. Built on [AXI](https://github.com/kunchenguid/axi) principles — token-efficient [TOON](https://toonformat.dev) output, contextual help, content-first design.
 
-Wraps [cliclick](https://github.com/BlueM/cliclick) for input and macOS native APIs for perception.
+Wraps [cliclick](https://github.com/BlueM/cliclick) for input and uses OmniParser V2 plus macOS native APIs for perception.
 
 ## Install
 
@@ -24,6 +24,27 @@ axiclick
 
 You should see current mouse position, active window, and display info.
 
+## SoM-First Workflow
+
+axiclick is designed around Set-of-Mark (SoM) prompting: detect visible UI
+elements once, identify the target by `@id`, and click it without guessing
+coordinates.
+
+```bash
+axiclick som-setup                  # one-time OmniParser install (~2GB)
+axiclick som-start                  # keep models warm in the background
+axiclick focus Safari
+axiclick wait 500
+axiclick active                     # verify the frontmost window
+axiclick som /tmp/page.png --no-caption
+axiclick som-click @12
+axiclick wait 500
+axiclick screenshot /tmp/verify.png
+```
+
+If a nested window surface such as iPhone Mirroring is visible but not truly
+active yet, click inside that window first, then run `som`.
+
 ### Session hooks
 
 Self-install into Claude Code and Codex so every session starts with axiclick context:
@@ -33,6 +54,16 @@ axiclick install
 ```
 
 ## Commands
+
+### SoM
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `som-setup` | Install OmniParser V2 models and venv | `axiclick som-setup` |
+| `som-start` | Start the warm SoM daemon | `axiclick som-start` |
+| `som-stop` | Stop the warm SoM daemon | `axiclick som-stop` |
+| `som <path>` | Capture and annotate visible UI elements | `axiclick som /tmp/screen.png --no-caption` |
+| `som-click @<id>` | Click a marked element from the last SoM pass | `axiclick som-click @3` |
 
 ### Input
 
@@ -49,11 +80,15 @@ axiclick install
 | `keydown <mods>` | Hold modifier keys | `axiclick keydown cmd` |
 | `keyup <mods>` | Release modifier keys | `axiclick keyup cmd` |
 | `combo <mod+key>` | Keyboard shortcut | `axiclick combo cmd+c` |
+| `submit [--at x,y]` | Submit the active input after dismissing suggestions | `axiclick submit --at 500,467` |
 | `scroll <dir> [n]` | Scroll | `axiclick scroll down 5` |
 | `wait <ms>` | Wait | `axiclick wait 500` |
 | `run <raw>` | Raw cliclick passthrough | `axiclick run "c:1,2 t:hi"` |
 
 Coordinates support absolute (`100,200`), relative (`+50,+0`), and current position (`.`).
+
+`key <key>` uses macOS System Events for web-relevant special keys like `return`,
+`tab`, and arrow keys so browsers receive real DOM key events reliably.
 
 ### Perception
 
@@ -65,6 +100,7 @@ Coordinates support absolute (`100,200`), relative (`+50,+0`), and current posit
 | `screen` | Display info | `axiclick screen` |
 | `position` | Mouse coordinates | `axiclick position` |
 | `color <x>,<y>` | Sample pixel color | `axiclick color 100,200` |
+| `focused` | Show the currently focused UI element | `axiclick focused` |
 
 `screenshot` supports `--region <x>,<y>,<w>,<h>` and `--display <n>`.
 
@@ -102,8 +138,12 @@ Use `axiclick` for macOS desktop automation.
 - macOS 10.15+
 - Node.js 18+
 - [cliclick](https://github.com/BlueM/cliclick) (`brew install cliclick`)
+- Python 3 for `axiclick som-setup`
 - Xcode Command Line Tools (for compiling Swift helpers on first run)
 - Accessibility permissions for your terminal app
+- Automation permission for `System Events` may be requested the first time you
+  use `key` with special keys like `return` or `tab`
+- ~2GB free disk if you plan to use `som-setup`
 
 ## Acknowledgments
 

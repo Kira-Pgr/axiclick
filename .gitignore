@@ -1,4 +1,7 @@
 node_modules/
 lib/scroll-helper
 lib/ax-helper
+lib/ocr-helper
+lib/swipe-helper
+lib/display-helper
 *.o
