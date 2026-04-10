@@ -149,7 +149,7 @@ Coordinates support absolute (`100,200`), relative (`+50,+0`), and current posit
 </details>
 
 <details>
-<summary><strong>Meta</strong></summary>
+<summary><strong>Utilities — focus, session hooks</strong></summary>
 
 | Command | Description |
 |---------|-------------|
