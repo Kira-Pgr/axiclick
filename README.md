@@ -95,6 +95,8 @@ Coordinates support absolute (`100,200`), relative (`+50,+0`), and current posit
 | Command | Description | Example |
 |---------|-------------|---------|
 | `screenshot <path>` | Capture screen to file | `axiclick screenshot /tmp/s.png` |
+| `info <image>` | Show image dimensions and mapping metadata | `axiclick info /tmp/s.png` |
+| `probe <image> <x>,<y>` | Mark an image pixel and resolve screen coords | `axiclick probe /tmp/s.png 940,644` |
 | `windows` | List visible windows | `axiclick windows` |
 | `active` | Show focused app/window | `axiclick active` |
 | `screen` | Display info | `axiclick screen` |
@@ -103,6 +105,11 @@ Coordinates support absolute (`100,200`), relative (`+50,+0`), and current posit
 | `focused` | Show the currently focused UI element | `axiclick focused` |
 
 `screenshot` supports `--region <x>,<y>,<w>,<h>` and `--display <n>`.
+It also writes a sidecar metadata file at `<path>.json` so later `info` and
+`probe` calls can convert image pixels back into screen coordinates.
+
+`probe` writes an annotated PNG with a crosshair. Add `--click` to click the
+resolved screen point when the image is screen-ready.
 
 `windows` supports `--app <name>` to filter.
 

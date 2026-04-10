@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const toon = require('../lib/toon');
 const cliclick = require('../lib/cliclick');
 const screen = require('../lib/screen');
+const imageMeta = require('../lib/image-meta');
 const { getExecutablePath, collapseTilde, installHooks } = require('../lib/hooks');
 
 const VERSION = '0.1.0';
@@ -69,7 +71,6 @@ function confirmAction(action, details) {
 }
 
 function ensureSwiftHelper(helperName) {
-  const fs = require('fs');
   const helperPath = path.join(__dirname, '..', 'lib', helperName);
   const srcPath = path.join(__dirname, '..', 'lib', `${helperName}.swift`);
   const helperMissing = !fs.existsSync(helperPath);
@@ -85,6 +86,27 @@ function ensureSwiftHelper(helperName) {
   }
 
   return helperPath;
+}
+
+function readImageHelperJson(args, timeout = 15000) {
+  const helperPath = ensureSwiftHelper('image-helper');
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(helperPath, args, { timeout });
+  if (typeof result === 'object' && result.error) die(result.error);
+  try {
+    return JSON.parse(result);
+  } catch {
+    die('Image helper returned malformed JSON');
+  }
+}
+
+function readImageSize(imagePath) {
+  return readImageHelperJson(['size', imagePath]);
+}
+
+function defaultProbePath(imagePath) {
+  const parsed = path.parse(imagePath);
+  return path.join(parsed.dir || '.', `${parsed.name}.probe.png`);
 }
 
 // ── Commands ─────────────────────────────────────────
@@ -349,11 +371,135 @@ commands['screenshot'] = function cmdScreenshot(args) {
   if (!path.extname(filepath)) filepath += '.png';
   const result = screen.screenshot(filepath, opts);
   if (result.error) die(result.error);
+  let metadataPath = null;
+  const disps = screen.displays();
+  if (Array.isArray(disps) && disps.length) {
+    metadataPath = imageMeta.writeMetadata(filepath, imageMeta.buildScreenshotMetadata(filepath, opts, disps));
+  }
   out(toon.obj('screenshot', {
     path: filepath,
     size: `${Math.round(result.size / 1024)}KB`,
+    ...(metadataPath ? { metadata: metadataPath } : {}),
   }));
 };
+
+commands['info'] = function cmdInfo(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick info <image-path>\n\nShow image dimensions and any saved coordinate-mapping metadata.\nReads the screenshot sidecar at <image-path>.json when present.\n\nExamples:\n  axiclick info /tmp/screen.png\n  axiclick info /tmp/som.png`);
+    return;
+  }
+
+  const imagePath = args[0];
+  if (!imagePath) die('Expected image path', ['Run `axiclick info <image-path>`']);
+
+  const size = readImageSize(imagePath);
+  const metadataPath = imageMeta.sidecarPath(imagePath);
+  const meta = imageMeta.readMetadata(imagePath);
+
+  const parts = [
+    toon.obj('image', {
+      path: imagePath,
+      size: `${size.width}x${size.height}`,
+      metadata: meta && !meta.error ? metadataPath : 'missing',
+      ...(meta?.source ? { source: meta.source } : {}),
+    }),
+  ];
+
+  if (meta?.error) {
+    parts.push(toon.obj('mapping', {
+      screen_ready: 'unknown',
+      error: meta.error,
+    }));
+  } else if (meta) {
+    const capture = meta.capture || {};
+    const mapping = meta.mapping || {};
+    parts.push(toon.obj('mapping', {
+      capture: capture.mode || 'unknown',
+      screen_ready: mapping.screenReady ? 'yes' : 'no',
+      ...(capture.displayId ? { display: capture.displayName ? `${capture.displayId} (${capture.displayName})` : capture.displayId } : {}),
+      ...(capture.displayCount ? { displays: capture.displayCount } : {}),
+      ...(capture.region ? { region: `${capture.region.x},${capture.region.y},${capture.region.w},${capture.region.h}` } : {}),
+      ...(Number.isFinite(mapping.originX) && Number.isFinite(mapping.originY) ? { origin: `${mapping.originX},${mapping.originY}` } : {}),
+      ...(Number.isFinite(mapping.scale) ? { scale: mapping.scale } : {}),
+      ...(capture.marksPath ? { marks: capture.marksPath } : {}),
+    }));
+  } else {
+    parts.push(toon.obj('mapping', {
+      screen_ready: 'unknown',
+    }));
+  }
+
+  out(toon.section(parts));
+  out(toon.help([
+    'Run `axiclick probe <image-path> <x>,<y>` to annotate a point and resolve screen coordinates',
+    'Run `axiclick screenshot <path>` to capture a fresh image with sidecar metadata',
+  ]));
+};
+
+commands['probe'] = function cmdProbe(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick probe <image-path> <x>,<y> [--output <path>] [--click]\n\nAnnotate an image with a crosshair at the given image pixel and, when\nmetadata is available, convert it to screen coordinates.\n\nFlags:\n  --output <path>  Save the annotated probe image here (default: <image>.probe.png)\n  --click          Click the resolved screen coordinate (requires screen-ready metadata)\n\nExamples:\n  axiclick probe /tmp/screen.png 940,644\n  axiclick probe /tmp/screen.png 940,644 --click`);
+    return;
+  }
+
+  let imagePath = null;
+  let coord = null;
+  let outputPath = null;
+  let doClick = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--output' && args[i + 1]) {
+      outputPath = args[++i];
+    } else if (args[i] === '--click') {
+      doClick = true;
+    } else if (!args[i].startsWith('--') && !imagePath) {
+      imagePath = args[i];
+    } else if (!args[i].startsWith('--') && !coord) {
+      coord = args[i];
+    }
+  }
+
+  if (!imagePath) die('Expected image path', ['Run `axiclick probe <image-path> <x>,<y>`']);
+  const [rawX, rawY] = requireCoords(coord, 'probe <image-path>');
+  const x = +rawX;
+  const y = +rawY;
+  outputPath = outputPath || defaultProbePath(imagePath);
+
+  const probe = readImageHelperJson(['probe', imagePath, outputPath, String(x), String(y)]);
+  const meta = imageMeta.readMetadata(imagePath);
+  const screenPoint = imageMeta.screenPointForImagePoint(meta, x, y);
+
+  if (doClick && !screenPoint) {
+    die('Probe image is not screen-ready', [
+      'Run `axiclick info <image-path>` to inspect the saved mapping metadata',
+      'Capture a fresh image with `axiclick screenshot <path>` or `axiclick som <path>`',
+    ]);
+  }
+
+  if (doClick) {
+    checkCliclick();
+    const result = cliclick.click(screenPoint.x, screenPoint.y);
+    if (typeof result === 'object' && result.error) die(result.error);
+  }
+
+  out(toon.obj('probe', {
+    path: imagePath,
+    point: `${x},${y}`,
+    image_size: `${probe.width}x${probe.height}`,
+    annotated: outputPath,
+    screen_ready: screenPoint ? 'yes' : 'no',
+    ...(screenPoint ? { screen_point: `${screenPoint.x},${screenPoint.y}` } : {}),
+    ...(meta?.mapping && Number.isFinite(meta.mapping.originX) && Number.isFinite(meta.mapping.originY) ? { origin: `${meta.mapping.originX},${meta.mapping.originY}` } : {}),
+    ...(meta?.mapping && Number.isFinite(meta.mapping.scale) ? { scale: meta.mapping.scale } : {}),
+    ...(doClick ? { action: 'click' } : {}),
+  }));
+  out(toon.help([
+    'Open the annotated image to verify the marked pixel before clicking',
+    'Run `axiclick probe <image-path> <x>,<y> --click` to click the resolved screen point',
+  ]));
+};
+
+commands['test'] = commands['probe'];
 
 commands['windows'] = function cmdWindows(args) {
   if (args[0] === '--help') {
@@ -929,9 +1075,18 @@ commands['som'] = function cmdSom(args) {
     toonOutput = result;
   }
 
+  let metadataPath = null;
+  if (targetDisplay) {
+    metadataPath = imageMeta.writeMetadata(outputPath, imageMeta.buildSomMetadata(outputPath, targetDisplay, LAST_SOM_JSON));
+  }
+
   out(toonOutput);
+  if (metadataPath) {
+    out(toon.obj('metadata', { path: metadataPath }));
+  }
   out(toon.help([
     'Run `axiclick som-click @<id>` to click an element by its mark ID',
+    'Run `axiclick probe <output-path> <x>,<y>` to debug image-to-screen coordinate mapping',
     'Run `axiclick som /tmp/som.png --no-caption` for faster detection',
     'Run `axiclick som-start` to preload models as a background daemon',
   ]));

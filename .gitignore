@@ -4,4 +4,5 @@ lib/ax-helper
 lib/ocr-helper
 lib/swipe-helper
 lib/display-helper
+lib/image-helper
 *.o

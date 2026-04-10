@@ -39,6 +39,7 @@ window, like iPhone Mirroring, click once inside that window before the next
 |--------|-------|----------|----------|----------|
 | **`som`** | ~1.5s (warm) | Best | All apps | Default choice. Always prefer this. |
 | `screenshot` | Instant | N/A (visual only) | All apps | Quick verification after actions |
+| `probe` | Instant | Exact for saved images | Images with sidecar metadata | Debug image-to-screen coordinate mapping |
 | `snapshot` | Instant | Good for native apps | Native macOS only | Finder, Safari, Xcode, System Settings |
 | `windows` | ~1s | Exact | All apps | Finding window positions, listing open apps |
 
@@ -277,6 +278,61 @@ axiclick screenshot /tmp/s.png
 axiclick screenshot /tmp/r.png --region 0,0,800,600    # capture region
 axiclick screenshot /tmp/d.png --display 2              # secondary display
 ```
+
+Each screenshot also writes a sidecar metadata file at `<path>.json`. The
+sidecar stores capture origin, scale, and display context so image pixels can
+later be mapped back to screen coordinates with `info` or `probe`.
+
+#### `info <image-path>`
+
+Show image dimensions and any saved screen-mapping metadata.
+
+```bash
+axiclick info /tmp/s.png
+```
+
+Output:
+```
+image:
+  path: /tmp/s.png
+  size: 3024x1964
+  metadata: /tmp/s.png.json
+  source: screenshot
+mapping:
+  capture: display
+  screen_ready: yes
+  display: 1 (Built-in Retina Display)
+  region: 0,0,1512,982
+  origin: 0,0
+  scale: 2
+```
+
+#### `probe <image-path> <x>,<y>`
+
+Mark an exact pixel in an image, save an annotated copy with a crosshair, and
+convert that point to screen coordinates when metadata is available.
+
+```bash
+axiclick probe /tmp/s.png 940,644
+axiclick probe /tmp/s.png 940,644 --click
+```
+
+Output:
+```
+probe:
+  path: /tmp/s.png
+  point: 940,644
+  image_size: 3024x1964
+  annotated: /tmp/s.probe.png
+  screen_ready: yes
+  screen_point: 470,322
+  origin: 0,0
+  scale: 2
+```
+
+Use `probe` when you want to verify that the pixel you picked in a screenshot
+matches the place `axiclick` would click on screen. `--click` is explicit opt-in
+so debugging stays safe by default.
 
 #### `windows`
 
