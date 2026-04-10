@@ -154,6 +154,8 @@ commands[''] = function home() {
   checkCliclick();
 
   parts.push(toon.help([
+    'Run `axiclick som <path>` to detect all UI elements on screen',
+    'Run `axiclick som-click @<id>` to click a detected element',
     'Run `axiclick click <x>,<y>` to click at a position',
     'Run `axiclick type "<text>"` to type text',
     'Run `axiclick screenshot <path>` to capture the screen',
@@ -968,7 +970,7 @@ function somServerRunning() {
 
 commands['som'] = function cmdSom(args) {
   if (args[0] === '--help') {
-    out(`usage: axiclick som <output-path> [--display <n>] [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --display <n>        Capture a specific display; defaults to the active\n                       window's display when multiple monitors are attached\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --display 2 --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
+    out(`usage: axiclick som <output-path> [--display <n>] [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nCaptioning is OFF by default (fast, ~2s). Use --caption to enable AI icon\ndescriptions (~60s, generates text labels for each detected icon).\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --display <n>        Capture a specific display; defaults to the active\n                       window's display when multiple monitors are attached\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --caption            Enable AI icon captioning (slow, ~60s)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --display 2\n  axiclick som /tmp/som.png --caption`);
     return;
   }
 
@@ -979,10 +981,15 @@ commands['som'] = function cmdSom(args) {
   // Parse args
   let outputPath = null;
   let captureDisplay = null;
+  let wantCaption = false;
   const passthrough = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--display') {
       captureDisplay = +(args[++i] || NaN);
+    } else if (args[i] === '--caption') {
+      wantCaption = true;
+    } else if (args[i] === '--no-caption') {
+      wantCaption = false;
     } else if (args[i].startsWith('--')) {
       passthrough.push(args[i]);
       if (args[i + 1] && !args[i + 1].startsWith('--')) {
@@ -991,6 +998,10 @@ commands['som'] = function cmdSom(args) {
     } else if (!outputPath) {
       outputPath = args[i];
     }
+  }
+  // Default: skip captioning (fast). Use --caption to opt in.
+  if (!wantCaption) {
+    passthrough.push('--no-caption');
   }
 
   if (!outputPath) die('Expected output path', ['Run `axiclick som <output-path>`']);
@@ -1047,7 +1058,7 @@ commands['som'] = function cmdSom(args) {
     // Use nc to talk to the Unix socket (synchronous, single request)
     const escapedReq = req.replace(/'/g, "'\\''");
     const resp = runShell(
-      `echo '${escapedReq}' | nc -U -w 30 "${SOM_SOCK}"`,
+      `echo '${escapedReq}' | nc -U -w 120 "${SOM_SOCK}"`,
       { timeout: 120000 }
     );
     try { require('fs').unlinkSync(tmpScreenshot); } catch {}
@@ -1087,7 +1098,7 @@ commands['som'] = function cmdSom(args) {
   out(toon.help([
     'Run `axiclick som-click @<id>` to click an element by its mark ID',
     'Run `axiclick probe <output-path> <x>,<y>` to debug image-to-screen coordinate mapping',
-    'Run `axiclick som /tmp/som.png --no-caption` for faster detection',
+    'Run `axiclick som <path> --caption` to add AI icon descriptions (slow, ~60s)',
     'Run `axiclick som-start` to preload models as a background daemon',
   ]));
 };
