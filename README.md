@@ -1,53 +1,68 @@
-# axiclick
+<p align="center">
+  <h1 align="center">axiclick</h1>
+  <p align="center">
+    <strong>Desktop automation for AI agents on macOS</strong>
+  </p>
+  <p align="center">
+    See the screen. Find elements. Click precisely. No coordinate guessing.
+  </p>
+  <p align="center">
+    <a href="https://www.npmjs.com/package/axiclick"><img src="https://img.shields.io/npm/v/axiclick?color=cb0000&label=npm" alt="npm"></a>
+    <a href="https://github.com/Kira-Pgr/axiclick"><img src="https://img.shields.io/badge/macOS-only-000000?logo=apple&logoColor=white" alt="macOS"></a>
+    <a href="https://github.com/kunchenguid/axi"><img src="https://img.shields.io/badge/AXI-compliant-blue" alt="AXI"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  </p>
+</p>
 
-[![npm](https://img.shields.io/npm/v/axiclick?color=cb0000&label=npm)](https://www.npmjs.com/package/axiclick)
-[![macOS](https://img.shields.io/badge/macOS-only-000000?logo=apple&logoColor=white)](https://github.com/Kira-Pgr/axiclick)
-[![AXI](https://img.shields.io/badge/AXI-compliant-blue)](https://github.com/kunchenguid/axi)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+---
 
-Agent-ergonomic macOS mouse, keyboard, and screen automation. Built on [AXI](https://github.com/kunchenguid/axi) principles — token-efficient [TOON](https://toonformat.dev) output, contextual help, content-first design.
+<p align="center">
+  <img src="assets/demo.gif" alt="axiclick demo — SoM workflow detecting and clicking UI elements" width="720">
+</p>
 
-Wraps [cliclick](https://github.com/BlueM/cliclick) for input and uses OmniParser V2 plus macOS native APIs for perception.
+## Why axiclick?
 
-## Install
+Most desktop automation tools are built for humans scripting GUIs. axiclick is built for **AI agents** that need to control macOS apps — with token-efficient output, structured perception, and zero guesswork.
+
+- **SoM (Set-of-Mark) perception** — detects every UI element on screen, labels them with `@id` tags, and lets you click by ID instead of fragile pixel coordinates
+- **Token-efficient** — outputs [TOON](https://toonformat.dev)-formatted data designed for LLM context windows, not humans reading terminals
+- **Full input control** — mouse clicks, drags, keyboard shortcuts, text typing, scrolling — everything an agent needs
+- **Accessibility tree access** — query native macOS AXUIElement trees for apps that expose them
+- **Agent session hooks** — self-installs into Claude Code and Codex so agents start with axiclick context automatically
+
+## Quick Start
 
 ```bash
 brew install cliclick        # required dependency
-npm install -g axiclick      # install axiclick globally
+npm install -g axiclick      # install globally
 ```
 
-Verify:
+Verify the install:
 
 ```bash
-axiclick
+axiclick                     # shows mouse position, active window, display info
 ```
 
-You should see current mouse position, active window, and display info.
+### Your first SoM workflow
 
-## SoM-First Workflow
-
-axiclick is designed around Set-of-Mark (SoM) prompting: detect visible UI
-elements once, identify the target by `@id`, and click it without guessing
-coordinates.
+The core loop: **screenshot → detect elements → click by ID → verify**.
 
 ```bash
-axiclick som-setup                  # one-time OmniParser install (~2GB)
-axiclick som-start                  # keep models warm in the background
-axiclick focus Safari
+axiclick som-setup                    # one-time: download OmniParser V2 models (~2GB)
+axiclick som-start                    # start the detection daemon
+
+axiclick focus Safari                 # bring target app to front
 axiclick wait 500
-axiclick active                     # verify the frontmost window
-axiclick som /tmp/page.png --no-caption
-axiclick som-click @12
-axiclick wait 500
-axiclick screenshot /tmp/verify.png
+axiclick som /tmp/page.png            # detect all UI elements → labeled image
+axiclick som-click @12                # click element #12 by ID
+axiclick screenshot /tmp/verify.png   # confirm the result
 ```
 
-If a nested window surface such as iPhone Mirroring is visible but not truly
-active yet, click inside that window first, then run `som`.
+> **Tip:** If a nested surface like iPhone Mirroring is visible but not active, click inside that window first, then run `som`.
 
-### Session hooks
+### Install session hooks
 
-Self-install into Claude Code and Codex so every session starts with axiclick context:
+Auto-inject axiclick context into every Claude Code and Codex session:
 
 ```bash
 axiclick install
@@ -55,7 +70,8 @@ axiclick install
 
 ## Commands
 
-### SoM
+<details>
+<summary><strong>SoM — Set-of-Mark perception</strong></summary>
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -65,7 +81,10 @@ axiclick install
 | `som <path>` | Capture and annotate visible UI elements | `axiclick som /tmp/screen.png --no-caption` |
 | `som-click @<id>` | Click a marked element from the last SoM pass | `axiclick som-click @3` |
 
-### Input
+</details>
+
+<details>
+<summary><strong>Input — mouse, keyboard, text</strong></summary>
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -80,17 +99,19 @@ axiclick install
 | `keydown <mods>` | Hold modifier keys | `axiclick keydown cmd` |
 | `keyup <mods>` | Release modifier keys | `axiclick keyup cmd` |
 | `combo <mod+key>` | Keyboard shortcut | `axiclick combo cmd+c` |
-| `submit [--at x,y]` | Submit the active input after dismissing suggestions | `axiclick submit --at 500,467` |
+| `submit [--at x,y]` | Submit input after dismissing suggestions | `axiclick submit --at 500,467` |
 | `scroll <dir> [n]` | Scroll | `axiclick scroll down 5` |
 | `wait <ms>` | Wait | `axiclick wait 500` |
 | `run <raw>` | Raw cliclick passthrough | `axiclick run "c:1,2 t:hi"` |
 
 Coordinates support absolute (`100,200`), relative (`+50,+0`), and current position (`.`).
 
-`key <key>` uses macOS System Events for web-relevant special keys like `return`,
-`tab`, and arrow keys so browsers receive real DOM key events reliably.
+`key <key>` uses macOS System Events for web-relevant special keys like `return`, `tab`, and arrow keys so browsers receive real DOM key events reliably.
 
-### Perception
+</details>
+
+<details>
+<summary><strong>Perception — screenshots, windows, display</strong></summary>
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -104,16 +125,16 @@ Coordinates support absolute (`100,200`), relative (`+50,+0`), and current posit
 | `color <x>,<y>` | Sample pixel color | `axiclick color 100,200` |
 | `focused` | Show the currently focused UI element | `axiclick focused` |
 
-`screenshot` supports `--region <x>,<y>,<w>,<h>` and `--display <n>`.
-It also writes a sidecar metadata file at `<path>.json` so later `info` and
-`probe` calls can convert image pixels back into screen coordinates.
+`screenshot` supports `--region <x>,<y>,<w>,<h>` and `--display <n>`. It writes a sidecar metadata file at `<path>.json` so `info` and `probe` can convert image pixels back into screen coordinates.
 
-`probe` writes an annotated PNG with a crosshair. Add `--click` to click the
-resolved screen point when the image is screen-ready.
+`probe` writes an annotated PNG with a crosshair. Add `--click` to click the resolved screen point.
 
 `windows` supports `--app <name>` to filter.
 
-### Accessibility (AXUIElement)
+</details>
+
+<details>
+<summary><strong>Accessibility — AXUIElement tree</strong></summary>
 
 | Command | Description | Example |
 |---------|-------------|---------|
@@ -125,14 +146,28 @@ resolved screen point when the image is screen-ready.
 
 > **Note:** Accessibility works best with native macOS apps (Finder, Safari, Xcode). Cross-platform apps (Electron, WeChat) may expose minimal trees — fall back to coordinate-based automation with `screenshot` + `click`.
 
-### Meta
+</details>
+
+<details>
+<summary><strong>Meta</strong></summary>
 
 | Command | Description |
 |---------|-------------|
 | `focus <app>` | Bring app to foreground |
 | `install` | Install Claude Code / Codex session hooks |
 
-## CLAUDE.md
+</details>
+
+## When to Use axiclick
+
+| Scenario | Why axiclick |
+|----------|-------------|
+| Automate macOS apps with no CLI/API | Finder, WeChat, Xcode, System Settings |
+| Sites that block headless browsers | Cloudflare, reCAPTCHA — real mouse/keyboard via actual display |
+| iPhone Mirroring automation | Control iOS apps through the macOS mirroring window |
+| QA test any GUI application | Screenshot → verify visual state programmatically |
+
+## Agent Integration
 
 Add to your `CLAUDE.md` or `AGENTS.md`:
 
@@ -142,20 +177,20 @@ Use `axiclick` for macOS desktop automation.
 
 ## Requirements
 
-- macOS 10.15+
-- Node.js 18+
-- [cliclick](https://github.com/BlueM/cliclick) (`brew install cliclick`)
-- Python 3 for `axiclick som-setup`
-- Xcode Command Line Tools (for compiling Swift helpers on first run)
-- Accessibility permissions for your terminal app
-- Automation permission for `System Events` may be requested the first time you
-  use `key` with special keys like `return` or `tab`
-- ~2GB free disk if you plan to use `som-setup`
+| Requirement | Details |
+|-------------|---------|
+| **OS** | macOS 10.15+ |
+| **Runtime** | Node.js 18+ |
+| **Dependencies** | [cliclick](https://github.com/BlueM/cliclick) (`brew install cliclick`) |
+| **SoM models** | Python 3, ~2GB disk (for `som-setup`) |
+| **Build tools** | Xcode Command Line Tools (compiles Swift helpers on first run) |
+| **Permissions** | Accessibility for terminal app; Automation for System Events on first `key` use |
 
 ## Acknowledgments
 
-- [cliclick](https://github.com/BlueM/cliclick) by Carsten Blüm — the macOS mouse/keyboard engine axiclick wraps. BSD 3-Clause licensed.
+- [cliclick](https://github.com/BlueM/cliclick) by Carsten Blum — the macOS mouse/keyboard engine axiclick wraps. BSD 3-Clause licensed.
 - [AXI](https://github.com/kunchenguid/axi) — the agent ergonomic interface standard this tool follows.
+- [OmniParser V2](https://github.com/microsoft/OmniParser) by Microsoft — the vision model powering Set-of-Mark detection.
 
 ## License
 
