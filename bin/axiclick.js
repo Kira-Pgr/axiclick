@@ -429,6 +429,50 @@ commands['ax-fill'] = function cmdAxFill(args) {
   out(result);
 };
 
+commands['submit'] = function cmdSubmit(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick submit [--at <x>,<y>]\n\nSubmit the current text input. Dismisses autocomplete by clicking\naway, then re-clicks the input and presses Enter.\n\nIf --at is provided, uses those coordinates for the input field.\nOtherwise uses the last click position.\n\nExamples:\n  axiclick type "my query"\n  axiclick submit\n  axiclick submit --at 500,467`);
+    return;
+  }
+  checkCliclick();
+
+  // Get current mouse position (where the input field is)
+  const pos = cliclick.getPosition();
+
+  // Parse optional --at override
+  let inputX = pos.x, inputY = pos.y;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--at' && args[i + 1]) {
+      const coords = parseCoords(args[++i]);
+      if (coords) { inputX = +coords[0]; inputY = +coords[1]; }
+    }
+  }
+
+  // 1. Wait for JS to process last keystrokes
+  cliclick.wait('200');
+  // 2. Click away to dismiss autocomplete (50px above input)
+  cliclick.click(inputX, inputY - 50);
+  cliclick.wait('150');
+  // 3. Click back on the input to refocus
+  cliclick.click(inputX, inputY);
+  cliclick.wait('150');
+  // 4. Press Enter
+  cliclick.keypress('return');
+  confirmAction('submit', { position: `${inputX},${inputY}` });
+};
+
+commands['focused'] = function cmdFocused(args) {
+  if (args[0] === '--help') {
+    out(`usage: axiclick focused\n\nShow which UI element currently has keyboard focus.\nReports role, label, value, position, and whether it's editable.\nUse to verify a text field is active before typing.\n\nExamples:\n  axiclick focused`);
+    return;
+  }
+  const helperPath = path.join(__dirname, '..', 'lib', 'ax-helper');
+  const { run: execRun } = require('../lib/exec');
+  const result = execRun(helperPath, ['focused'], { timeout: 5000 });
+  if (typeof result === 'object' && result.error) die(result.error);
+  out(result);
+};
+
 commands['scroll'] = function cmdScroll(args) {
   if (args[0] === '--help') {
     out(`usage: axiclick scroll <direction> [<amount>] [--at <x>,<y>]\n\nScroll in the given direction. Amount defaults to 5 (lines).\nDirections: up, down, left, right\n\nFlags:\n  --at <x>,<y>  Scroll at a specific position (moves mouse first)\n\nExamples:\n  axiclick scroll down\n  axiclick scroll up 10\n  axiclick scroll down 3 --at 500,400`);

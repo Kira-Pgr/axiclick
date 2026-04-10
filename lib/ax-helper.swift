@@ -248,6 +248,43 @@ case "value":
     print("  uid: @\(uid)")
     print("  text: \"\(value)\"")
 
+case "focused":
+    // Report which element currently has keyboard focus
+    let focusedElement: AXUIElement? = {
+        var val: AnyObject?
+        AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &val)
+        return val as! AXUIElement?
+    }()
+
+    if let focused = focusedElement {
+        let role = getStringAttr(focused, kAXRoleAttribute)
+        let title = getStringAttr(focused, kAXTitleAttribute)
+        let value = getStringAttr(focused, kAXValueAttribute)
+        let desc = getStringAttr(focused, kAXDescriptionAttribute)
+        let position = getPointAttr(focused)
+        let size = getSizeAttr(focused)
+
+        let displayRole = role.hasPrefix("AX") ? String(role.dropFirst(2)) : role
+        let label = !title.isEmpty ? title : (!desc.isEmpty ? desc : "")
+
+        print("focused:")
+        print("  role: \(displayRole)")
+        if !label.isEmpty { print("  label: \(label)") }
+        if !value.isEmpty {
+            let preview = value.count > 100 ? String(value.prefix(97)) + "..." : value
+            print("  value: \"\(preview)\"")
+        }
+        if let p = position, let s = size {
+            print("  position: \(Int(p.x)),\(Int(p.y))")
+            print("  size: \(Int(s.width))x\(Int(s.height))")
+        }
+
+        let isTextField = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"].contains(role)
+        print("  editable: \(isTextField)")
+    } else {
+        print("focused: none")
+    }
+
 default:
     fputs("error: unknown command '\(cmd)'\n", stderr)
     exit(1)

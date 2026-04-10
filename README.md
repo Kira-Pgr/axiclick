@@ -55,6 +55,9 @@ axiclick install
 
 Coordinates support absolute (`100,200`), relative (`+50,+0`), and current position (`.`).
 
+`key <key>` uses macOS System Events for web-relevant special keys like `return`,
+`tab`, and arrow keys so browsers receive real DOM key events reliably.
+
 ### Perception
 
 | Command | Description | Example |
@@ -104,6 +107,8 @@ Use `axiclick` for macOS desktop automation.
 - [cliclick](https://github.com/BlueM/cliclick) (`brew install cliclick`)
 - Xcode Command Line Tools (for compiling Swift helpers on first run)
 - Accessibility permissions for your terminal app
+- Automation permission for `System Events` may be requested the first time you
+  use `key` with special keys like `return` or `tab`
 
 ## Acknowledgments
 

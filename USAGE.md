@@ -183,6 +183,9 @@ axiclick key esc             # press Escape
 axiclick key tab             # press Tab
 ```
 
+`axiclick key` uses macOS System Events for web-relevant special keys like
+`return`, `tab`, and the arrow keys so browsers receive real DOM key events.
+
 **Note:** `key` only works with special keys listed above. For letter keys, use `type`. For keyboard shortcuts, use `keydown`/`keyup` or `combo`.
 
 #### `keydown <modifiers>` / `keyup <modifiers>`
@@ -472,6 +475,8 @@ Always run `axiclick som-start` at the beginning of a session.
 **SoM is slow** — Run `axiclick som-start` to preload models. Check with `axiclick som-stop && axiclick som-start`.
 
 **Accessibility permissions** — Go to System Settings > Privacy & Security > Accessibility and enable your terminal app.
+
+**Special keys still do nothing in browsers** — macOS may prompt for Automation access the first time `axiclick key return` or `axiclick key tab` talks to `System Events`. Approve it in System Settings > Privacy & Security > Automation for your terminal app.
 
 **Clicking wrong elements** — Always use `som` + `som-click @<id>` instead of guessing coordinates. Read the annotated screenshot to verify which element has which ID.
 
