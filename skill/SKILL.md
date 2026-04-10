@@ -98,6 +98,18 @@ Do NOT skip steps 3 (verify focus) or 8 (verify result). These catch the two mos
 | `som-stop` | End of session. Frees GPU memory. |
 | `som-setup` | First time only. Downloads OmniParser models (~2GB). |
 
+## Timeouts
+
+Most axiclick commands are instant, but some can be slow:
+
+| Command | Typical duration | Notes |
+|---------|-----------------|-------|
+| `som <path>` | ~5s warm, ~15s cold | Run `som-start` at session start. |
+| `som <path> --caption` | ~60s | Avoid unless you need icon descriptions. |
+| `som-setup` | ~10min | Set Bash timeout to 600000. First-time only. |
+
+The Bash tool's default timeout is 2 minutes (120,000ms). For `som-setup`, set a longer timeout.
+
 ## Anti-patterns
 
 - **Typing into the void.** Always verify focus with `axiclick active` before `axiclick type`. Window focus can be lost between commands.

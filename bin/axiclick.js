@@ -161,6 +161,7 @@ commands[''] = function home() {
     'Run `axiclick screenshot <path>` to capture the screen',
     'Run `axiclick windows` to list open windows',
     'Run `axiclick <command> --help` for details on any command',
+    'Most commands are instant; `som` takes ~5s warm, ~60s with --caption.',
     'Invoke the /axiclick skill before desktop automation tasks for workflow discipline',
   ]));
 
