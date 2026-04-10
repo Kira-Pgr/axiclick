@@ -70,11 +70,14 @@ def run_ocr(image, image_path=None):
     # Try native Vision OCR first (16x faster than EasyOCR)
     ocr_helper = Path(__file__).parent / "ocr-helper"
     if ocr_helper.exists():
+        temp_path = None
         # Save image to temp file if we don't have a path
         if image_path is None:
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            image.save(tmp.name)
-            image_path = tmp.name
+            temp_path = tmp.name
+            tmp.close()
+            image.save(temp_path)
+            image_path = temp_path
 
         try:
             result = subprocess.run(
@@ -95,6 +98,12 @@ def run_ocr(image, image_path=None):
                 return elements
         except Exception:
             pass  # fall through to EasyOCR
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
     # Fallback: EasyOCR
     import easyocr
@@ -286,6 +295,8 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--no-caption", action="store_true", help="Skip captioning")
     parser.add_argument("--scale", type=float, default=1.0, help="Retina scale factor (auto-detected if not set)")
+    parser.add_argument("--offset-x", type=int, default=0, help="Global display X origin for screen-ready coordinates")
+    parser.add_argument("--offset-y", type=int, default=0, help="Global display Y origin for screen-ready coordinates")
     parser.add_argument("--json-out", metavar="PATH", default=None, help="Write element list as JSON to this path alongside TOON output")
     args = parser.parse_args()
 
@@ -296,6 +307,8 @@ def main():
     if not args.image or not args.output:
         parser.print_help()
         sys.exit(2)
+    if args.scale <= 0:
+        parser.error("--scale must be greater than 0")
 
     from PIL import Image
 
@@ -344,6 +357,8 @@ def main():
     # Optionally write element list as JSON (screen coordinates)
     if args.json_out:
         scale = args.scale
+        offset_x = args.offset_x
+        offset_y = args.offset_y
         json_elements = []
         for elem in all_elements:
             x1, y1, x2, y2 = elem["bbox"]
@@ -353,8 +368,8 @@ def main():
                 "id": elem["id"],
                 "kind": elem["kind"],
                 "label": elem["label"],
-                "x": int(x1 / scale),
-                "y": int(y1 / scale),
+                "x": offset_x + int(x1 / scale),
+                "y": offset_y + int(y1 / scale),
                 "w": int(w / scale),
                 "h": int(h / scale),
             })
@@ -363,6 +378,8 @@ def main():
 
     # Output TOON to stdout with screen coordinates (divide by Retina scale)
     scale = args.scale
+    offset_x = args.offset_x
+    offset_y = args.offset_y
     file_size = os.path.getsize(args.output)
     print(f"som:")
     print(f"  path: {args.output}")
@@ -380,8 +397,8 @@ def main():
             w = x2 - x1
             h = y2 - y1
             # Convert to screen coordinates
-            sx = int(x1 / scale)
-            sy = int(y1 / scale)
+            sx = offset_x + int(x1 / scale)
+            sy = offset_y + int(y1 / scale)
             sw = int(w / scale)
             sh = int(h / scale)
             label = elem["label"].replace('"', '\\"').replace("\n", " ")

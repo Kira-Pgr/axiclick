@@ -225,12 +225,13 @@ axiclick keyup cmd           # release Command
 
 #### `combo <modifier+key>`
 
-Press a keyboard shortcut. Separate modifiers from the key with `+`. The key must be a letter — this uses `keydown` + `type` + `keyup` internally.
+Press a keyboard shortcut. Separate modifiers from the key with `+`. The final key can be a letter or any special key supported by `axiclick key`; this uses `keydown` + `keypress` + `keyup` internally.
 
 ```bash
 axiclick combo cmd+c         # Copy
 axiclick combo cmd+v         # Paste
 axiclick combo cmd+shift+z   # Redo
+axiclick combo alt+tab       # App switcher
 ```
 
 #### `scroll <direction> [amount]`

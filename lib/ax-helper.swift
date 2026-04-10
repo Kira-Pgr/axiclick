@@ -251,9 +251,12 @@ case "value":
 case "focused":
     // Report which element currently has keyboard focus
     let focusedElement: AXUIElement? = {
-        var val: AnyObject?
-        AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &val)
-        return val as! AXUIElement?
+        var val: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &val)
+        guard result == .success, let focused = val, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return unsafeBitCast(focused, to: AXUIElement.self)
     }()
 
     if let focused = focusedElement {

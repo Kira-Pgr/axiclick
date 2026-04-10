@@ -23,9 +23,18 @@ case "touch":
         fputs("error: touch requires x y dx dy\n", stderr)
         exit(1)
     }
-    let durationMs = CommandLine.arguments.count > 6 ? Int(CommandLine.arguments[6]) ?? 300 : 300
+    let durationMs: Int
+    if CommandLine.arguments.count > 6 {
+        guard let parsedDuration = Int(CommandLine.arguments[6]), parsedDuration >= 0 else {
+            fputs("error: duration_ms must be a non-negative integer\n", stderr)
+            exit(1)
+        }
+        durationMs = parsedDuration
+    } else {
+        durationMs = 300
+    }
     let steps = 20
-    let stepDelay = UInt32(durationMs * 1000 / steps) // microseconds per step
+    let stepDelay = useconds_t(durationMs * 1000 / steps) // microseconds per step
 
     let start = CGPoint(x: x, y: y)
     let end = CGPoint(x: x + dx, y: y + dy)

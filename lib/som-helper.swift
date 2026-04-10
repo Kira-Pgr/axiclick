@@ -19,6 +19,28 @@ struct SoMElement {
 
 // ── Screenshot ──
 
+func orderedDisplayIDs() -> [CGDirectDisplayID] {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var count: UInt32 = 0
+    let err = CGGetActiveDisplayList(UInt32(ids.count), &ids, &count)
+    guard err == .success else { return [CGMainDisplayID()] }
+
+    var ordered = Array(ids.prefix(Int(count)))
+    let mainID = CGMainDisplayID()
+    if let mainIndex = ordered.firstIndex(of: mainID), mainIndex != 0 {
+        ordered.remove(at: mainIndex)
+        ordered.insert(mainID, at: 0)
+    }
+    return ordered
+}
+
+func displayID(for displayNumber: Int) -> CGDirectDisplayID? {
+    guard displayNumber > 0 else { return nil }
+    let displays = orderedDisplayIDs()
+    guard displayNumber <= displays.count else { return nil }
+    return displays[displayNumber - 1]
+}
+
 func captureScreen(region: CGRect? = nil, displayID: CGDirectDisplayID = CGMainDisplayID()) -> CGImage? {
     if let r = region {
         return CGWindowListCreateImage(r, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution])
@@ -310,13 +332,27 @@ while i < CommandLine.arguments.count {
     switch arg {
     case "--display":
         i += 1
-        // Just use main display for now
+        guard i < CommandLine.arguments.count, let displayNumber = Int(CommandLine.arguments[i]) else {
+            print("error: --display requires a display number")
+            exit(1)
+        }
+        guard let selectedDisplayID = displayID(for: displayNumber) else {
+            print("error: display \(displayNumber) is not available")
+            exit(1)
+        }
+        displayID = selectedDisplayID
     case "--region":
         i += 1
-        let parts = CommandLine.arguments[i].split(separator: ",").compactMap { Int($0) }
-        if parts.count == 4 {
-            region = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+        guard i < CommandLine.arguments.count else {
+            print("error: --region requires x,y,w,h")
+            exit(1)
         }
+        let parts = CommandLine.arguments[i].split(separator: ",").compactMap { Int($0) }
+        guard parts.count == 4 else {
+            print("error: --region requires x,y,w,h")
+            exit(1)
+        }
+        region = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
     default:
         if !arg.hasPrefix("--") {
             outputPath = arg
@@ -362,7 +398,7 @@ if axElements.count > 5 {
 }
 
 // 4. Assign IDs
-var numbered = allElements.enumerated().map { (i, var elem) -> SoMElement in
+var numbered = allElements.enumerated().map { (i, elem) -> SoMElement in
     SoMElement(id: i + 1, label: elem.label, x: elem.x, y: elem.y,
                w: elem.w, h: elem.h, kind: elem.kind)
 }

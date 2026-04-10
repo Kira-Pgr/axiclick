@@ -38,6 +38,30 @@ function checkCliclick() {
   }
 }
 
+function mainDisplay(displays) {
+  return Array.isArray(displays) ? (displays.find(d => d.main) || displays[0] || null) : null;
+}
+
+function displayForPoint(displays, x, y) {
+  if (!Array.isArray(displays)) return null;
+  return displays.find(d => (
+    x >= d.x &&
+    x < d.x + d.width &&
+    y >= d.y &&
+    y < d.y + d.height
+  )) || null;
+}
+
+function windowCenter(win) {
+  if (!win) return null;
+  if (![win.x, win.y, win.w, win.h].every(Number.isFinite)) return null;
+  if (win.w <= 0 || win.h <= 0) return null;
+  return {
+    x: win.x + Math.round(win.w / 2),
+    y: win.y + Math.round(win.h / 2),
+  };
+}
+
 function confirmAction(action, details) {
   const fields = { action };
   if (details) Object.assign(fields, details);
@@ -77,7 +101,7 @@ commands[''] = function home() {
 
   // Display info
   if (Array.isArray(disps) && disps.length) {
-    const main = disps.find(d => d.main) || disps[0];
+    const main = mainDisplay(disps);
     parts.push(toon.obj('screen', {
       resolution: `${main.width}x${main.height}`,
       retina: main.retina ? 'yes' : 'no',
@@ -362,12 +386,14 @@ commands['screen'] = function cmdScreen(args) {
   if (typeof disps === 'object' && disps.error) die(disps.error);
   if (!disps.length) { out('screen: no displays detected'); return; }
   out(toon.table('displays', disps.map((d, i) => ({
-    id: i + 1,
+    id: d.id || i + 1,
     name: d.name || 'Display',
+    origin: `${d.x},${d.y}`,
     resolution: `${d.width}x${d.height}`,
+    scale: String(d.scale || 1),
     retina: d.retina ? 'yes' : 'no',
     main: d.main ? 'yes' : 'no',
-  })), ['id', 'name', 'resolution', 'retina', 'main']));
+  })), ['id', 'name', 'origin', 'resolution', 'scale', 'retina', 'main']));
 };
 
 commands['snapshot'] = function cmdSnapshot(args) {
@@ -532,7 +558,9 @@ commands['swipe'] = function cmdSwipe(args) {
 
   const { run: execRun } = require('../lib/exec');
 
-  // Workspace swipe mode — use cliclick Ctrl+Arrow (reliable)
+  // Workspace swipe mode — use the native helper so Ctrl+Arrow is posted
+  // as a single CGEvent sequence instead of mixing modifier state across
+  // different input backends.
   if (args[0] === 'workspace') {
     let dir = args[1];
     if (dir === 'next') dir = 'right';
@@ -540,11 +568,8 @@ commands['swipe'] = function cmdSwipe(args) {
     if (!dir || !['left', 'right', 'up', 'down'].includes(dir)) {
       die('Expected direction: left, right, up, down, next, prev', ['Run `axiclick swipe workspace next`']);
     }
-    checkCliclick();
-    const arrowKey = `arrow-${dir}`;
-    cliclick.keydown('ctrl');
-    cliclick.keypress(arrowKey);
-    cliclick.keyup('ctrl');
+    const result = execRun(helperPath, ['gesture', dir]);
+    if (typeof result === 'object' && result.error) die(result.error);
     confirmAction('swipe-workspace', { direction: dir });
     return;
   }
@@ -561,12 +586,18 @@ commands['swipe'] = function cmdSwipe(args) {
   let distance = 200;
   let duration = 300;
 
-  // Try to use screen center as default
+  // Default to the active window center when possible; fall back to the
+  // main display center using global display bounds.
   const disps = screen.displays();
-  if (Array.isArray(disps) && disps.length) {
-    const main = disps.find(d => d.main) || disps[0];
-    atX = Math.round(main.width / (main.retina ? 4 : 2));
-    atY = Math.round(main.height / (main.retina ? 4 : 2));
+  const act = screen.active();
+  const center = act && !act.error ? windowCenter(act) : null;
+  if (center) {
+    atX = center.x;
+    atY = center.y;
+  } else if (Array.isArray(disps) && disps.length) {
+    const main = mainDisplay(disps);
+    atX = main.x + Math.round(main.width / 2);
+    atY = main.y + Math.round(main.height / 2);
   }
 
   for (let i = 1; i < args.length; i++) {
@@ -796,7 +827,7 @@ function somServerRunning() {
 
 commands['som'] = function cmdSom(args) {
   if (args[0] === '--help') {
-    out(`usage: axiclick som <output-path> [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
+    out(`usage: axiclick som <output-path> [--display <n>] [--box-threshold <n>] [--iou-threshold <n>] [--imgsz <n>] [--no-caption]\n\nTake a screenshot, detect UI elements with OmniParser V2, and save an\nannotated image with numbered marks (Set-of-Mark prompting).\nElement list is saved to ~/.axiclick/last-som.json for use with som-click.\n\nIf the SoM daemon is running (\`axiclick som-start\`), uses it for fast\nresponse without cold-starting Python each time.\n\nRequires: \`axiclick som-setup\` to be run first.\n\nFlags:\n  --display <n>        Capture a specific display; defaults to the active\n                       window's display when multiple monitors are attached\n  --box-threshold <n>  Detection confidence threshold (default: 0.05)\n  --iou-threshold <n>  Overlap removal threshold (default: 0.1)\n  --imgsz <n>          Detection resolution (default: 640)\n  --no-caption         Skip AI captioning (faster)\n\nExamples:\n  axiclick som /tmp/som.png\n  axiclick som /tmp/som.png --display 2 --no-caption\n  axiclick som /tmp/som.png --imgsz 1280`);
     return;
   }
 
@@ -806,9 +837,12 @@ commands['som'] = function cmdSom(args) {
 
   // Parse args
   let outputPath = null;
+  let captureDisplay = null;
   const passthrough = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith('--')) {
+    if (args[i] === '--display') {
+      captureDisplay = +(args[++i] || NaN);
+    } else if (args[i].startsWith('--')) {
       passthrough.push(args[i]);
       if (args[i + 1] && !args[i + 1].startsWith('--')) {
         passthrough.push(args[++i]);
@@ -819,18 +853,40 @@ commands['som'] = function cmdSom(args) {
   }
 
   if (!outputPath) die('Expected output path', ['Run `axiclick som <output-path>`']);
+  if (captureDisplay != null && !Number.isFinite(captureDisplay)) {
+    die('Expected a numeric display id after --display', ['Run `axiclick screen` to list attached displays']);
+  }
 
   const fs = require('fs');
   const { run: execRun } = require('../lib/exec');
+  const disps = screen.displays();
+  if (typeof disps === 'object' && disps.error) die(disps.error);
+
+  let targetDisplay = null;
+  if (Array.isArray(disps) && disps.length) {
+    if (captureDisplay != null) {
+      targetDisplay = disps.find(d => d.id === captureDisplay) || null;
+      if (!targetDisplay) {
+        die(`Display ${captureDisplay} is not available`, ['Run `axiclick screen` to list attached displays']);
+      }
+    } else if (disps.length > 1) {
+      const act = screen.active();
+      const center = act && !act.error ? windowCenter(act) : null;
+      targetDisplay = center ? displayForPoint(disps, center.x, center.y) : null;
+      if (!targetDisplay) targetDisplay = mainDisplay(disps);
+    } else {
+      targetDisplay = disps[0];
+    }
+  }
 
   // Take screenshot first
   const tmpScreenshot = `/tmp/axiclick-som-input-${Date.now()}.png`;
-  const ssResult = screen.screenshot(tmpScreenshot);
+  const ssResult = screen.screenshot(tmpScreenshot, targetDisplay ? { display: targetDisplay.id } : {});
   if (ssResult.error) die(ssResult.error);
 
-  // Detect Retina scale factor
-  const disps = screen.displays();
-  const scale = (Array.isArray(disps) && disps.length && disps.find(d => d.main)?.retina) ? 2 : 1;
+  const scale = targetDisplay?.scale || 1;
+  const offsetX = targetDisplay?.x || 0;
+  const offsetY = targetDisplay?.y || 0;
 
   let toonOutput;
 
@@ -842,6 +898,8 @@ commands['som'] = function cmdSom(args) {
       image: tmpScreenshot,
       output: outputPath,
       scale,
+      offsetX,
+      offsetY,
       passthrough,
       jsonOut: LAST_SOM_JSON,
     });
@@ -864,6 +922,8 @@ commands['som'] = function cmdSom(args) {
     const result = execRun(SOM_PYTHON, [
       SOM_CLI, tmpScreenshot, outputPath,
       '--scale', String(scale),
+      '--offset-x', String(offsetX),
+      '--offset-y', String(offsetY),
       '--json-out', LAST_SOM_JSON,
       ...passthrough,
     ], { timeout: 120000 });

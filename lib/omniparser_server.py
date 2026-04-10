@@ -233,7 +233,7 @@ def _annotate(image, elements):
     return annotated
 
 
-def _build_toon(output_path, all_elements, scale):
+def _build_toon(output_path, all_elements, scale, offset_x=0, offset_y=0):
     """Build the same TOON output that omniparser_cli.py prints."""
     lines = []
     file_size = os.path.getsize(output_path)
@@ -252,8 +252,8 @@ def _build_toon(output_path, all_elements, scale):
             x1, y1, x2, y2 = elem["bbox"]
             w = x2 - x1
             h = y2 - y1
-            sx = int(x1 / scale)
-            sy = int(y1 / scale)
+            sx = offset_x + int(x1 / scale)
+            sy = offset_y + int(y1 / scale)
             sw = int(w / scale)
             sh = int(h / scale)
             lbl = elem["label"].replace('"', '\\"').replace("\n", " ")
@@ -267,12 +267,19 @@ def handle_run(req):
     """Process a 'run' request and return a TOON string."""
     image_path = req.get("image")
     output_path = req.get("output")
-    scale = float(req.get("scale", 1.0))
+    try:
+        scale = float(req.get("scale", 1.0))
+    except (TypeError, ValueError):
+        return {"error": "scale must be a positive number"}
     passthrough = req.get("passthrough", [])
     json_out = req.get("jsonOut")
+    offset_x = int(req.get("offsetX", 0))
+    offset_y = int(req.get("offsetY", 0))
 
     if not image_path or not output_path:
         return {"error": "run request requires 'image' and 'output' fields"}
+    if scale <= 0:
+        return {"error": "scale must be greater than 0"}
 
     # Parse passthrough flags (mirrors omniparser_cli.py arg parsing)
     box_threshold = 0.05
@@ -323,15 +330,15 @@ def handle_run(req):
                 "id": elem["id"],
                 "kind": elem["kind"],
                 "label": elem["label"],
-                "x": int(x1 / scale),
-                "y": int(y1 / scale),
+                "x": offset_x + int(x1 / scale),
+                "y": offset_y + int(y1 / scale),
                 "w": int(w / scale),
                 "h": int(h / scale),
             })
         with open(json_out, "w") as fh:
             json.dump(json_elements, fh)
 
-    toon_str = _build_toon(output_path, all_elements, scale)
+    toon_str = _build_toon(output_path, all_elements, scale, offset_x=offset_x, offset_y=offset_y)
     return {"toon": toon_str}
 
 

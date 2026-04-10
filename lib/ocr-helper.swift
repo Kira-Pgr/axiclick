@@ -26,7 +26,12 @@ request.usesLanguageCorrection = false
 request.recognitionLanguages = ["en", "zh-Hans", "zh-Hant", "ja", "ko"]
 
 let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-try? handler.perform([request])
+do {
+    try handler.perform([request])
+} catch {
+    fputs("error: OCR request failed: \(error)\n", stderr)
+    exit(1)
+}
 
 guard let results = request.results else {
     print("[]")
