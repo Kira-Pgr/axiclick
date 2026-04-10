@@ -21,7 +21,17 @@ enum SwipeHelperError: Error, LocalizedError {
 struct ManagedDisplaySpace {
     let identifier: String
     let currentSpaceID: UInt64
-    let spaces: [UInt64]
+    let spaces: [ManagedSpace]
+}
+
+struct ManagedSpace {
+    let id: UInt64
+    let label: String
+}
+
+struct MissionControlSpace {
+    let element: AXUIElement
+    let label: String
 }
 
 typealias SLSMainConnectionIDFn = @convention(c) () -> Int32
@@ -70,6 +80,31 @@ func parseUInt64(_ value: Any?) -> UInt64? {
     return nil
 }
 
+func managedSpace(from value: [String: Any]) -> ManagedSpace? {
+    guard let id = parseUInt64(value["ManagedSpaceID"] ?? value["id64"]) else { return nil }
+
+    let type = parseInt(value["type"]) ?? -1
+    if type == 0 {
+        return ManagedSpace(id: id, label: "desktop")
+    }
+
+    let tileSpaces = ((value["TileLayoutManager"] as? [String: Any])?["TileSpaces"] as? [[String: Any]]) ?? []
+    if let tile = tileSpaces.first {
+        if let appName = tile["appName"] as? String, !appName.isEmpty {
+            return ManagedSpace(id: id, label: "fullscreen:\(appName)")
+        }
+        if let name = tile["name"] as? String, !name.isEmpty {
+            return ManagedSpace(id: id, label: "fullscreen:\(name)")
+        }
+    }
+
+    if let name = value["name"] as? String, !name.isEmpty {
+        return ManagedSpace(id: id, label: "space:\(name)")
+    }
+
+    return ManagedSpace(id: id, label: "type:\(type)")
+}
+
 func loadManagedDisplaySpaces(_ skylight: SkyLightAPI) throws -> [ManagedDisplaySpace] {
     let connection = skylight.mainConnectionID()
     guard let rawDisplays = skylight.copyManagedDisplaySpaces(connection)?.takeRetainedValue() as? [[String: Any]] else {
@@ -80,9 +115,7 @@ func loadManagedDisplaySpaces(_ skylight: SkyLightAPI) throws -> [ManagedDisplay
         guard let identifier = display["Display Identifier"] as? String else { return nil }
         let currentSpace = display["Current Space"] as? [String: Any]
         let currentSpaceID = parseUInt64(currentSpace?["ManagedSpaceID"] ?? currentSpace?["id64"]) ?? 0
-        let spaces = (display["Spaces"] as? [[String: Any]] ?? []).compactMap {
-            parseUInt64($0["ManagedSpaceID"] ?? $0["id64"])
-        }
+        let spaces = (display["Spaces"] as? [[String: Any]] ?? []).compactMap(managedSpace(from:))
         return ManagedDisplaySpace(identifier: identifier, currentSpaceID: currentSpaceID, spaces: spaces)
     }
 }
@@ -150,7 +183,10 @@ func openMissionControl() throws {
         openError = error
         semaphore.signal()
     }
-    _ = semaphore.wait(timeout: .now() + 2)
+    let waitResult = semaphore.wait(timeout: .now() + 2)
+    if waitResult == .timedOut {
+        throw SwipeHelperError.message("error: timed out waiting for Mission Control to open")
+    }
     if let openError {
         throw SwipeHelperError.message("error: unable to open Mission Control (\(openError.localizedDescription))")
     }
@@ -202,6 +238,35 @@ func findSpacesList(forDisplayID displayID: CGDirectDisplayID) throws -> AXUIEle
     return spacesList
 }
 
+func missionControlSpaceLabel(for element: AXUIElement) -> String {
+    let title = axAttr(element, kAXTitleAttribute) as? String ?? ""
+    let description = axAttr(element, kAXDescriptionAttribute) as? String ?? ""
+
+    if title.hasPrefix("Desktop ") {
+        return "desktop"
+    }
+    if description.localizedCaseInsensitiveContains("full screen"), !title.isEmpty {
+        return "fullscreen:\(title)"
+    }
+    if !title.isEmpty {
+        return "space:\(title)"
+    }
+    if !description.isEmpty {
+        return "desc:\(description)"
+    }
+    return "unknown"
+}
+
+func missionControlSpaces(forDisplayID displayID: CGDirectDisplayID) throws -> [MissionControlSpace] {
+    let spacesList = try findSpacesList(forDisplayID: displayID)
+    let children = axAttr(spacesList, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    return children.compactMap { child in
+        let role = axAttr(child, kAXRoleAttribute) as? String ?? ""
+        guard role == kAXButtonRole as String else { return nil }
+        return MissionControlSpace(element: child, label: missionControlSpaceLabel(for: child))
+    }
+}
+
 func switchWorkspace(direction: String) throws {
     guard direction == "left" || direction == "right" else {
         throw SwipeHelperError.message("error: workspace gesture requires left or right")
@@ -211,10 +276,10 @@ func switchWorkspace(direction: String) throws {
     let connection = skylight.mainConnectionID()
     let activeSpaceID = skylight.getActiveSpace(connection)
     let managedDisplays = try loadManagedDisplaySpaces(skylight)
-    guard let activeDisplay = managedDisplays.first(where: { $0.currentSpaceID == activeSpaceID || $0.spaces.contains(activeSpaceID) }) else {
+    guard let activeDisplay = managedDisplays.first(where: { $0.currentSpaceID == activeSpaceID || $0.spaces.contains(where: { $0.id == activeSpaceID }) }) else {
         throw SwipeHelperError.message("error: unable to determine the active display space")
     }
-    guard let currentIndex = activeDisplay.spaces.firstIndex(of: activeSpaceID) else {
+    guard let currentIndex = activeDisplay.spaces.firstIndex(where: { $0.id == activeSpaceID }) else {
         throw SwipeHelperError.message("error: active space not found in display order")
     }
 
@@ -234,14 +299,23 @@ func switchWorkspace(direction: String) throws {
     let openedMissionControl = try ensureMissionControlOpen()
     do {
         usleep(350_000)
-        let spacesList = try findSpacesList(forDisplayID: displayID)
-        let spaces = axAttr(spacesList, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        let spaces = try missionControlSpaces(forDisplayID: displayID)
+        guard spaces.count == activeDisplay.spaces.count else {
+            throw SwipeHelperError.message("error: Mission Control spaces do not match the active display")
+        }
+
+        let expectedLabels = activeDisplay.spaces.map { $0.label }
+        let actualLabels = spaces.map { $0.label }
+        guard expectedLabels == actualLabels else {
+            throw SwipeHelperError.message("error: Mission Control spaces are not aligned with the active display")
+        }
+
         guard targetIndex < spaces.count else {
             throw SwipeHelperError.message("error: target workspace thumbnail is unavailable")
         }
-        let target = spaces[targetIndex]
+        let target = spaces[targetIndex].element
         let result = AXUIElementPerformAction(target, kAXPressAction as CFString)
-        if result != .success {
+        if result != AXError.success {
             throw SwipeHelperError.message("error: failed to activate the target workspace")
         }
     } catch {
