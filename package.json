@@ -1,9 +1,9 @@
 {
   "name": "axiclick",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "AXI-compliant macOS mouse, keyboard, and screen automation for AI agents",
   "bin": {
-    "axiclick": "./bin/axiclick.js"
+    "axiclick": "bin/axiclick.js"
   },
   "scripts": {
     "postinstall": "swiftc -O lib/scroll-helper.swift -o lib/scroll-helper 2>/dev/null || true; swiftc -O lib/ax-helper.swift -o lib/ax-helper 2>/dev/null || true; swiftc -O lib/ocr-helper.swift -o lib/ocr-helper 2>/dev/null || true; swiftc -O lib/swipe-helper.swift -o lib/swipe-helper 2>/dev/null || true; swiftc -O lib/display-helper.swift -o lib/display-helper 2>/dev/null || true"
@@ -12,6 +12,17 @@
   "engines": {
     "node": ">=18"
   },
-  "os": ["darwin"],
-  "keywords": ["axi", "cliclick", "macos", "automation", "agent", "mouse", "keyboard", "screenshot"]
+  "os": [
+    "darwin"
+  ],
+  "keywords": [
+    "axi",
+    "cliclick",
+    "macos",
+    "automation",
+    "agent",
+    "mouse",
+    "keyboard",
+    "screenshot"
+  ]
 }
